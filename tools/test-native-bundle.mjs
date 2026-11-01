@@ -1,0 +1,17 @@
+import {readFileSync} from 'node:fs';
+import {createContext,runInContext} from 'node:vm';
+import assert from 'node:assert/strict';
+const context=createContext({});
+runInContext(readFileSync('native/GuidedCapture/Resources/GuidedNative.js','utf8'),context);
+const api=context.GuidedNative;
+api.initialise(24);
+api.setCentre(JSON.stringify({centre:[0,0,0],radius:1,segment:'a'}));
+let ticket;
+for(let i=0;i<10&&!ticket;i++)ticket=JSON.parse(api.evaluateFrame(JSON.stringify({id:String(i),segment:'a',timestamp:i*.1,position:[0,0,1],forward:[0,0,-1],tracking:'normal',sharp:true,exposed:true,framed:true,subjectStill:true}))).ticket;
+assert.ok(ticket);
+assert.equal(ticket.frame.id,'7');
+assert.equal(api.acknowledge(ticket.token,ticket.generation,true),true);
+assert.equal(JSON.parse(api.coverage()).filter(Boolean).length,1);
+assert.equal('document' in context,false);
+assert.equal('fetch' in context,false);
+console.log('Native standalone bundle: JSON capture/acknowledgement PASS without browser or Node globals');

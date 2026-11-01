@@ -1,0 +1,8 @@
+node_modules/
+build-logs/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.ipa
+Captures/
+.DS_Store

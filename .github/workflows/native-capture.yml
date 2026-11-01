@@ -1,0 +1,76 @@
+name: Native capture compile check
+
+# SSH pushes to the dedicated build branch also work without a GitHub API token.
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/native-capture]
+    paths:
+      - 'native/**'
+      - '.github/workflows/native-capture.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-capture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Unsigned iOS and simulator compilation
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out native source only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            native
+          sparse-checkout-cone-mode: true
+
+      - name: Record Apple toolchain
+        run: |
+          mkdir -p build-logs
+          xcodebuild -version | tee build-logs/toolchain.txt
+          xcrun swift --version | tee -a build-logs/toolchain.txt
+
+      - name: Compile simulator host and embedded App Clip
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project native/GuidedCaptureDevice.xcodeproj \
+            -scheme CaptureHost \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/ffs-simulator" \
+            -resultBundlePath "$RUNNER_TEMP/ffs-simulator.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee build-logs/simulator.txt
+
+      - name: Compile unsigned iPhone host and embedded App Clip
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project native/GuidedCaptureDevice.xcodeproj \
+            -scheme CaptureHost \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ffs-device" \
+            -resultBundlePath "$RUNNER_TEMP/ffs-device.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee build-logs/device.txt
+
+      - name: Keep compile logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-capture-compile-logs
+          path: build-logs/
+          retention-days: 3
+          if-no-files-found: warn

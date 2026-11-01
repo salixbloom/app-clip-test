@@ -1,0 +1,23 @@
+{
+  "name": "ffs-planner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental two-person ARKit capture and App Clip build test",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "esbuild src/capture/guided-native.ts --bundle --format=iife --global-name=GuidedNative --platform=neutral --target=es2020 --outfile=native/GuidedCapture/Resources/GuidedNative.js",
+    "typecheck": "tsc --noEmit --target es2022 --module esnext --moduleResolution bundler --strict --skipLibCheck src/capture/guided-native.ts src/capture/arkit-record.ts",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && node tools/test-native-bundle.mjs && node tools/check-native-workflow.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "yaml": "^2.6.1"
+  }
+}
