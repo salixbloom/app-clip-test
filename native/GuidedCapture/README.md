@@ -1,9 +1,11 @@
 # Native guided capture scaffold
 
-Status (2026-11-01): native screen/controller, generated host+App Clip Xcode
-project, and tested portable bridge. **Neither iOS target has been compiled,
-signed or run.** This Windows workspace has no macOS/iOS SDK. Source/project
-structure checks are not substitutes for Xcode compilation or a device test.
+Status (2026-11-01): native screen/controller and generated host+App Clip Xcode
+project compiled successfully on GitHub macOS in both simulator and unsigned
+iPhone SDK builds. [First successful run](https://github.com/salixbloom/app-clip-test/actions/runs/41359514597)
+at source commit `c2724b737e875e5192c686690522201568d03bbd`.
+Neither target has been signed or run on an iPhone. This Windows workspace has
+no local macOS/iOS SDK; compilation success is not a hardware/quality test.
 
 `ARKitCaptureController.swift` connects rear-camera world tracking to the exact
 planner used by the desktop simulator through bundled JavaScriptCore. There is
@@ -65,6 +67,11 @@ CaptureHost on an attached iPhone to validate the camera/storage path before
 debugging App Clip invocation. Host installation is a development step; the
 intended end-user flow remains App Clip invocation without installing the host.
 
+`CaptureDeviceTest` is an additional standalone scheme for free-account personal
+sideloading experiments. It has no Clip dependency/embedding or Clip entitlements.
+The workflow packages its unsigned IPA; see `native/DEVICE-TEST.md`. It is not
+automatically signed, installed, or validated by compilation.
+
 The project uses placeholder identifiers `com.example.FFSCapture` and `.Clip`.
 Select the Apple development team, replace both bundle identifiers AND matching
 parent/Clip entitlement values, and configure actual invocation/associated
@@ -72,8 +79,8 @@ domains before App Clip distribution. The Clip scheme's `_XCAppClipURL` uses
 `https://example.invalid/capture` deliberately; it is not a deployed invocation.
 The host embeds and depends on the Clip. No account, provisioning profile,
 external domain, credential or upload destination is included.
-For the prepared manual GitHub compilation workflow and native-only repository
-contents, see `native/GITHUB-BUILD.md`. No remote run has occurred.
+For GitHub compilation workflow and native-only repository contents, see
+`native/GITHUB-BUILD.md`. Published branch: `codex/native-capture`.
 
 Regenerate the deterministic Xcode project/Info/entitlements/schemes in the
 reconstruction container using:
@@ -88,9 +95,9 @@ On macOS, an unsigned simulator SDK build can first check compilation:
 
     xcodebuild -project native/GuidedCaptureDevice.xcodeproj -scheme CaptureHost -destination 'generic/platform=iOS Simulator' -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
 
-This command has NOT run here. ARKit tracking itself still requires an iPhone.
-The native Swift callback actor isolation and generated project must be checked
-against the actual selected Xcode SDK before describing the build as working.
+This command has not run locally; the equivalent workflow passed remotely.
+ARKit tracking itself still requires an iPhone. Both target compilation and
+resource embedding passed the workflow; runtime behavior remains unverified.
 
 ## Device milestone and remaining integration
 

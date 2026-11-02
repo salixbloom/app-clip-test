@@ -37,9 +37,16 @@
 			"path" = "CaptureClip.app";
 			"sourceTree" = "BUILT_PRODUCTS_DIR";
 		};
+		61F4B3D04650057807BC5AFF = {
+			"isa" = "PBXFileReference";
+			"explicitFileType" = "wrapper.application";
+			"includeInIndex" = 0;
+			"path" = "CaptureDeviceTest.app";
+			"sourceTree" = "BUILT_PRODUCTS_DIR";
+		};
 		0A3E27B8CA818264D75C8D81 = {
 			"isa" = "PBXGroup";
-			"children" = (B7F578D3C919A2BD9491CD37, C0125F47FE739A728B431994);
+			"children" = (B7F578D3C919A2BD9491CD37, C0125F47FE739A728B431994, 61F4B3D04650057807BC5AFF);
 			"name" = "Products";
 			"sourceTree" = "<group>";
 		};
@@ -266,6 +273,81 @@
 			"productReference" = C0125F47FE739A728B431994;
 			"productType" = "com.apple.product-type.application.on-demand-install-capable";
 		};
+		0279CB7DAA2F160376E2E8CE = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = A60623F8D72C4744AE66F9B8;
+		};
+		00FD9DEBE424EEEF6DEBE1AA = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = 041BFC3113996C3A17158B34;
+		};
+		A09592EDC1D9FC0B50C9BDFE = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = 5941109E141B772C619E70E7;
+		};
+		55291EE3B082699F33B28961 = {
+			"isa" = "PBXSourcesBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = (0279CB7DAA2F160376E2E8CE, 00FD9DEBE424EEEF6DEBE1AA);
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		9A166D5C86A13DB416BC1798 = {
+			"isa" = "PBXFrameworksBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ();
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		F96CF168C86D0722AE6FA909 = {
+			"isa" = "PBXResourcesBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = (A09592EDC1D9FC0B50C9BDFE);
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		AA88FEAFA3C2B0399395E4AF = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "CaptureDeviceTest";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "com.example.FFSCapture.DeviceTest";
+				"INFOPLIST_FILE" = "GuidedCapture/CaptureDeviceTest-Info.plist";
+				"CODE_SIGN_ENTITLEMENTS" = "GuidedCapture/CaptureDeviceTest.entitlements";
+				"GENERATE_INFOPLIST_FILE" = "NO";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation" = "YES";
+				"SKIP_INSTALL" = "NO";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+			};
+			"name" = "Debug";
+		};
+		70D094C3C06D70E6B77BEFD0 = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "CaptureDeviceTest";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "com.example.FFSCapture.DeviceTest";
+				"INFOPLIST_FILE" = "GuidedCapture/CaptureDeviceTest-Info.plist";
+				"CODE_SIGN_ENTITLEMENTS" = "GuidedCapture/CaptureDeviceTest.entitlements";
+				"GENERATE_INFOPLIST_FILE" = "NO";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation" = "YES";
+				"SKIP_INSTALL" = "NO";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+			};
+			"name" = "Release";
+		};
+		D6652DA2EEE4EEFB49223B85 = {
+			"isa" = "XCConfigurationList";
+			"buildConfigurations" = (AA88FEAFA3C2B0399395E4AF, 70D094C3C06D70E6B77BEFD0);
+			"defaultConfigurationIsVisible" = 0;
+			"defaultConfigurationName" = "Release";
+		};
+		F63AD64D5598FF669AF15317 = {
+			"isa" = "PBXNativeTarget";
+			"buildConfigurationList" = D6652DA2EEE4EEFB49223B85;
+			"buildPhases" = (55291EE3B082699F33B28961, 9A166D5C86A13DB416BC1798, F96CF168C86D0722AE6FA909);
+			"buildRules" = ();
+			"dependencies" = ();
+			"name" = "CaptureDeviceTest";
+			"productName" = "CaptureDeviceTest";
+			"productReference" = 61F4B3D04650057807BC5AFF;
+			"productType" = "com.apple.product-type.application";
+		};
 		244210E48437B6556980A702 = {
 			"isa" = "PBXProject";
 			"attributes" = {
@@ -281,7 +363,7 @@
 			"productRefGroup" = 0A3E27B8CA818264D75C8D81;
 			"projectDirPath" = "";
 			"projectRoot" = "";
-			"targets" = (1A2D60F06CC1C2E8716B98AA, D85B68016F797E7C2555E163);
+			"targets" = (1A2D60F06CC1C2E8716B98AA, D85B68016F797E7C2555E163, F63AD64D5598FF669AF15317);
 		};
 	};
 	"rootObject" = 244210E48437B6556980A702;

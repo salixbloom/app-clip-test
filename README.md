@@ -11,3 +11,5 @@ See [native setup](native/GuidedCapture/README.md) and [GitHub builds](native/GI
 Use Node 22 in a container, run `npm ci`, then `npm run check`. `npm run build` regenerates the bundled planner used by JavaScriptCore. No private scans, MetaHuman assets, Apple credentials, or upload endpoint are included.
 
 This is source prepared for compilation, not validated medical or surgical software. See LICENSE.
+
+First native compile check passed: https://github.com/salixbloom/app-clip-test/actions/runs/41359514597 (simulator + unsigned iPhone host and embedded Clip). The new standalone CaptureDeviceTest target is for personal-signing experiments: see native/DEVICE-TEST.md. It does not implement App Clip distribution.

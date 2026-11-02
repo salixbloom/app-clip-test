@@ -25,8 +25,8 @@ for(const step of job.steps){
   }
  }
  if(step.uses?.startsWith('actions/checkout@'))assert.equal(step.with['persist-credentials'],false);
- if(step.uses?.startsWith('actions/upload-artifact@'))assert.equal(step.with.path,'build-logs/');
+ if(step.uses?.startsWith('actions/upload-artifact@'))assert.equal(step.with.path,step.with.name==='native-capture-compile-logs'?'build-logs/':'build-output/');
 }
-assert.equal(builds,2);
+assert.equal(builds,3);
 for(const path of ['native/GuidedCaptureDevice.xcodeproj/project.pbxproj','native/GuidedCaptureDevice.xcodeproj/xcshareddata/xcschemes/CaptureHost.xcscheme','native/GuidedCapture/Resources/GuidedNative.js'])assert.ok(existsSync(path),path);
 console.log('Native workflow YAML, shell syntax, unsigned build commands and local project paths PASS; no remote build performed.');

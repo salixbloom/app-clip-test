@@ -34,18 +34,20 @@ products = uid('products')
 source_refs=[]
 for file,kind in [('ARKitCaptureController.swift','sourcecode.swift'),('CaptureScreen.swift','sourcecode.swift'),('Resources/GuidedNative.js','sourcecode.javascript')]:
     source_refs.append(obj(file,'PBXFileReference',lastKnownFileType=kind,path='GuidedCapture/'+file,sourceTree='<group>'))
-product_refs={name:obj(name+'-product','PBXFileReference',explicitFileType='wrapper.application',includeInIndex=0,path=name+'.app',sourceTree='BUILT_PRODUCTS_DIR') for name in ['CaptureHost','CaptureClip']}
+product_refs={name:obj(name+'-product','PBXFileReference',explicitFileType='wrapper.application',includeInIndex=0,path=name+'.app',sourceTree='BUILT_PRODUCTS_DIR') for name in ['CaptureHost','CaptureClip','CaptureDeviceTest']}
 obj('products','PBXGroup',children=list(product_refs.values()),name='Products',sourceTree='<group>')
 obj('root-group','PBXGroup',children=source_refs+[products],sourceTree='<group>')
 
 # Info and entitlements are deterministic, inspectable XML property lists.
-for name in ['CaptureHost','CaptureClip']:
+for name in ['CaptureHost','CaptureClip','CaptureDeviceTest']:
     info={'CFBundleDevelopmentRegion':'en','CFBundleExecutable':'$(EXECUTABLE_NAME)','CFBundleIdentifier':'$(PRODUCT_BUNDLE_IDENTIFIER)','CFBundleInfoDictionaryVersion':'6.0','CFBundleName':'$(PRODUCT_NAME)','CFBundlePackageType':'APPL','CFBundleShortVersionString':'1.0','CFBundleVersion':'1','LSRequiresIPhoneOS':True,'NSCameraUsageDescription':'Capture a stationary subject with matched camera positions for a local reconstruction test.','UILaunchScreen':{},'UISupportedInterfaceOrientations':['UIInterfaceOrientationPortrait'],'UIApplicationSceneManifest':{'UIApplicationSupportsMultipleScenes':False}}
     if name=='CaptureClip':
         info['NSAppClip']={'NSAppClipRequestEphemeralUserNotification':False,'NSAppClipRequestLocationConfirmation':False}
         ent={'com.apple.developer.parent-application-identifiers':['$(AppIdentifierPrefix)com.example.FFSCapture']}
-    else:
+    elif name=='CaptureHost':
         ent={'com.apple.developer.associated-appclip-app-identifiers':['$(AppIdentifierPrefix)com.example.FFSCapture.Clip']}
+    else:
+        ent={}
     for suffix,data in [('-Info.plist',info),('.entitlements',ent)]:
         (ROOT/'GuidedCapture'/(name+suffix)).write_bytes(plistlib.dumps(data,sort_keys=True))
 
@@ -58,7 +60,7 @@ def configs(name, settings):
 
 common={'SDKROOT':'iphoneos','IPHONEOS_DEPLOYMENT_TARGET':'16.0','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES','SWIFT_STRICT_CONCURRENCY':'minimal','TARGETED_DEVICE_FAMILY':'1','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator','CODE_SIGN_STYLE':'Automatic','ENABLE_BITCODE':'NO','LD_RUNPATH_SEARCH_PATHS':['$(inherited)','@executable_path/Frameworks']}
 proj_configs=configs('project',common)
-for name in ['CaptureHost','CaptureClip']:
+for name in ['CaptureHost','CaptureClip','CaptureDeviceTest']:
     build_files=[obj(name+'-'+str(i),'PBXBuildFile',fileRef=r) for i,r in enumerate(source_refs)]
     phases=[obj(name+'-sources','PBXSourcesBuildPhase',buildActionMask=2147483647,files=build_files[:2],runOnlyForDeploymentPostprocessing=0),obj(name+'-frameworks','PBXFrameworksBuildPhase',buildActionMask=2147483647,files=[],runOnlyForDeploymentPostprocessing=0),obj(name+'-resources','PBXResourcesBuildPhase',buildActionMask=2147483647,files=build_files[2:],runOnlyForDeploymentPostprocessing=0)]
     dependencies=[]
@@ -67,15 +69,15 @@ for name in ['CaptureHost','CaptureClip']:
         phases.append(obj('embed-clips','PBXCopyFilesBuildPhase',buildActionMask=2147483647,dstPath='$(CONTENTS_FOLDER_PATH)/AppClips',dstSubfolderSpec=16,files=[embed],name='Embed App Clips',runOnlyForDeploymentPostprocessing=0))
         proxy=obj('clip-proxy','PBXContainerItemProxy',containerPortal=project,proxyType=1,remoteGlobalIDString=uid('CaptureClip-target'),remoteInfo='CaptureClip')
         dependencies.append(obj('clip-dependency','PBXTargetDependency',target=uid('CaptureClip-target'),targetProxy=proxy))
-    settings={'PRODUCT_NAME':name,'PRODUCT_BUNDLE_IDENTIFIER':'com.example.FFSCapture'+('.Clip' if name=='CaptureClip' else ''),'INFOPLIST_FILE':'GuidedCapture/'+name+'-Info.plist','CODE_SIGN_ENTITLEMENTS':'GuidedCapture/'+name+'.entitlements','GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_KEY_UIApplicationSceneManifest_Generation':'YES','SKIP_INSTALL':'YES' if name=='CaptureClip' else 'NO'}
+    settings={'PRODUCT_NAME':name,'PRODUCT_BUNDLE_IDENTIFIER':'com.example.FFSCapture'+('.Clip' if name=='CaptureClip' else '.DeviceTest' if name=='CaptureDeviceTest' else ''),'INFOPLIST_FILE':'GuidedCapture/'+name+'-Info.plist','CODE_SIGN_ENTITLEMENTS':'GuidedCapture/'+name+'.entitlements','GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_KEY_UIApplicationSceneManifest_Generation':'YES','SKIP_INSTALL':'YES' if name=='CaptureClip' else 'NO'}
     obj(name+'-target','PBXNativeTarget',buildConfigurationList=configs(name,settings),buildPhases=phases,buildRules=[],dependencies=dependencies,name=name,productName=name,productReference=product_refs[name],productType='com.apple.product-type.application.on-demand-install-capable' if name=='CaptureClip' else 'com.apple.product-type.application')
-obj('project','PBXProject',attributes={'BuildIndependentTargetsInParallel':'YES','LastUpgradeCheck':'1600'},buildConfigurationList=proj_configs,compatibilityVersion='Xcode 14.0',developmentRegion='en',hasScannedForEncodings=0,knownRegions=['en','Base'],mainGroup=root_group,productRefGroup=products,projectDirPath='',projectRoot='',targets=[uid('CaptureHost-target'),uid('CaptureClip-target')])
+obj('project','PBXProject',attributes={'BuildIndependentTargetsInParallel':'YES','LastUpgradeCheck':'1600'},buildConfigurationList=proj_configs,compatibilityVersion='Xcode 14.0',developmentRegion='en',hasScannedForEncodings=0,knownRegions=['en','Base'],mainGroup=root_group,productRefGroup=products,projectDirPath='',projectRoot='',targets=[uid(name+'-target') for name in ['CaptureHost','CaptureClip','CaptureDeviceTest']])
 
 out=ROOT/'GuidedCaptureDevice.xcodeproj'
 out.mkdir(exist_ok=True)
 (out/'project.pbxproj').write_text('// !$*UTF8*$!\n'+serial({'archiveVersion':1,'classes':{},'objectVersion':56,'objects':OBJECTS,'rootObject':project})+'\n')
 schemes=out/'xcshareddata/xcschemes';schemes.mkdir(parents=True,exist_ok=True)
-for name in ['CaptureHost','CaptureClip']:
+for name in ['CaptureHost','CaptureClip','CaptureDeviceTest']:
     scheme=ET.Element('Scheme',LastUpgradeVersion='1600',version='1.3')
     build=ET.SubElement(scheme,'BuildAction',parallelizeBuildables='YES',buildImplicitDependencies='YES')
     entries=ET.SubElement(build,'BuildActionEntries')
@@ -102,4 +104,7 @@ def check(v):
 for item in OBJECTS.values():check(item)
 for ref in source_refs:assert (ROOT/OBJECTS[ref]['path']).is_file()
 for path in (ROOT/'GuidedCapture').glob('*.plist'):plistlib.loads(path.read_bytes())
-print('Generated host + App Clip project; all object references, source paths and XML plists validated. Xcode compilation NOT performed.')
+assert OBJECTS[uid('CaptureDeviceTest-target')]['dependencies'] == []
+assert plistlib.loads((ROOT/'GuidedCapture/CaptureDeviceTest.entitlements').read_bytes()) == {}
+assert OBJECTS[uid('CaptureDeviceTest-target')]['productType'] == 'com.apple.product-type.application'
+print('Generated host, App Clip and standalone diagnostic targets; references/paths/plists and standalone isolation validated. Xcode compilation NOT performed.')

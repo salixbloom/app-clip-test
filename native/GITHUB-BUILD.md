@@ -36,6 +36,8 @@ of an earlier run on the same branch.
 
 It builds the CaptureHost scheme, which depends on and embeds CaptureClip,
 against the simulator SDK and then the iPhone SDK. Both builds disable signing.
+It additionally builds standalone `CaptureDeviceTest` and retains an unsigned
+IPA for later personal signing; see `native/DEVICE-TEST.md`.
 Logs record the selected Apple toolchain and are retained for three days.
 It does not access Apple credentials, upload an app, publish a release, or process
 photos. Successful compilation does NOT produce an installable signed iPhone
@@ -43,6 +45,7 @@ build, validate ARKit tracking, or establish that App Clip invocation works.
 
 If simulator compilation fails, the device build does not run; inspect the
 first failing error in `simulator.txt`. Otherwise inspect `device.txt` as well.
+Standalone build errors appear in `device-test.txt`.
 Return logs for fixes before provisioning/signing work.
 
 ## Cost boundary

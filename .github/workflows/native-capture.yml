@@ -66,6 +66,34 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee build-logs/device.txt
 
+      - name: Build standalone diagnostic app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project native/GuidedCaptureDevice.xcodeproj \
+            -scheme CaptureDeviceTest \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ffs-device-test" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee build-logs/device-test.txt
+          mkdir -p "$RUNNER_TEMP/ffs-payload/Payload" build-output
+          ditto "$RUNNER_TEMP/ffs-device-test/Build/Products/Debug-iphoneos/CaptureDeviceTest.app" \
+            "$RUNNER_TEMP/ffs-payload/Payload/CaptureDeviceTest.app"
+          test ! -d "$RUNNER_TEMP/ffs-payload/Payload/CaptureDeviceTest.app/AppClips"
+          (cd "$RUNNER_TEMP/ffs-payload" && zip -qr "$GITHUB_WORKSPACE/build-output/CaptureDeviceTest-unsigned.ipa" Payload)
+          shasum -a 256 build-output/CaptureDeviceTest-unsigned.ipa > build-output/SHA256SUMS.txt
+
+      - name: Keep unsigned diagnostic package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: unsigned-capture-device-test
+          path: build-output/
+          retention-days: 3
+          if-no-files-found: error
+
       - name: Keep compile logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
