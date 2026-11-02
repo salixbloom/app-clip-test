@@ -24,10 +24,13 @@ var GuidedNative = (() => {
   var guided_native_exports = {};
   __export(guided_native_exports, {
     acknowledge: () => acknowledge,
+    beginSweep: () => beginSweep,
     coverage: () => coverage,
     evaluateDiagnosticFrame: () => evaluateDiagnosticFrame,
     evaluateFrame: () => evaluateFrame,
     evaluateQuality: () => evaluateQuality,
+    evaluateSweep: () => evaluateSweep,
+    finishSweep: () => finishSweep,
     initialise: () => initialise,
     resetQuality: () => resetQuality,
     setCentre: () => setCentre
@@ -170,14 +173,127 @@ var GuidedNative = (() => {
     }
   };
 
+  // src/capture/guided-sweep.ts
+  var rad = (v) => v * Math.PI / 180;
+  var wrap2 = (v) => Math.atan2(Math.sin(v), Math.cos(v));
+  var GuidedSweep = class {
+    constructor(total = 128) {
+      __publicField(this, "slots");
+      __publicField(this, "centre", null);
+      __publicField(this, "radius", 1);
+      __publicField(this, "front", 0);
+      __publicField(this, "segment", "");
+      __publicField(this, "generation", 0);
+      __publicField(this, "sequence", 0);
+      __publicField(this, "band", 1);
+      __publicField(this, "done", /* @__PURE__ */ new Set());
+      __publicField(this, "pending", null);
+      __publicField(this, "best", null);
+      __publicField(this, "previous", null);
+      this.slots = orbitSlots(total, 180);
+    }
+    setCentre(centre, radius, segment, front = 0) {
+      if (centre.length !== 3 || !centre.every(Number.isFinite) || !Number.isFinite(radius) || radius < 0.5 || radius > 1.5 || !Number.isFinite(front) || !segment) throw Error("Invalid scan centre");
+      this.centre = [...centre];
+      this.radius = radius;
+      this.front = front;
+      this.segment = segment;
+      this.generation++;
+      this.done.clear();
+      this.best = null;
+      this.pending = null;
+      this.previous = null;
+    }
+    begin(band) {
+      if (![0, 1, 2].includes(band)) throw Error("Invalid height pass");
+      if (this.best || this.pending) throw Error("Finish current pass first");
+      this.band = band;
+      this.previous = null;
+    }
+    coverage() {
+      return this.slots.map((s) => this.done.has(s.id));
+    }
+    response(message, keep = false, ticket = null) {
+      return { message, keep, candidateSlot: this.best?.slot ?? null, ticket, missing: this.slots.filter((s) => s.elevation === rad([-15, 0, 15][this.band]) && !this.done.has(s.id)).map((s) => s.id), completed: this.done.size, total: this.slots.length };
+    }
+    commit() {
+      if (!this.best || this.pending) return null;
+      const ticket = { token: ++this.sequence, generation: this.generation, slot: this.best.slot, frameId: this.best.frameId };
+      this.best = null;
+      this.pending = ticket;
+      return { ...ticket };
+    }
+    finish() {
+      return this.response("Pass stopped \u2014 review missing markers", false, this.commit());
+    }
+    acknowledge(token, generation, saved) {
+      if (!this.pending || this.pending.token !== token || this.pending.generation !== generation) return false;
+      if (saved) this.done.add(this.pending.slot);
+      this.pending = null;
+      return true;
+    }
+    update(f) {
+      if (!this.centre) return this.response("Confirm centre directly in front of the subject");
+      if (f.segment !== this.segment) {
+        this.centre = null;
+        this.best = null;
+        this.pending = null;
+        this.previous = null;
+        this.done.clear();
+        this.generation++;
+        return this.response("Tracking origin changed \u2014 confirm centre again");
+      }
+      if (this.pending) return this.response("Saving selected frame");
+      if (f.tracking !== "normal") return this.response("Pause sweep \u2014 tracking needs to recover");
+      if (!f.id || !Number.isFinite(f.timestamp) || ![...f.position, ...f.forward].every(Number.isFinite)) return this.response("Waiting for valid camera data");
+      const d = f.position.map((v, i) => v - this.centre[i]), length2 = Math.hypot(...d), forwardLength = Math.hypot(...f.forward);
+      if (length2 < 0.01 || forwardLength < 0.9) return this.response("Waiting for valid camera data");
+      const az = wrap2(Math.atan2(d[0], d[2]) - this.front), el = Math.atan2(d[1], Math.hypot(d[0], d[2]));
+      const row = this.slots.filter((s) => s.elevation === rad([-15, 0, 15][this.band]));
+      const slot = row.reduce((a, b) => Math.abs(az - a.azimuth) < Math.abs(az - b.azimuth) ? a : b), spacing = Math.PI / (row.length - 1);
+      const ticket = this.best && this.best.slot !== slot.id ? this.commit() : null;
+      const result = (message, keep = false) => this.response(message, keep, ticket);
+      if (Math.abs(az) > Math.PI / 2 + spacing * 0.45) return result("Stay in the front half of the head");
+      if (Math.abs(length2 - this.radius) > 0.15) return result(length2 > this.radius ? "Move closer" : "Move farther away");
+      const aim = Math.acos(Math.max(-1, Math.min(1, -f.forward.reduce((s, v, i) => s + v * d[i], 0) / (forwardLength * length2))));
+      if (aim > rad(10)) return result("Keep the head centred");
+      if (Math.abs(el - slot.elevation) > rad(6)) return result(el < slot.elevation ? "Raise camera to this pass" : "Lower camera to this pass");
+      const prev = this.previous;
+      this.previous = { ...f, position: [...f.position], forward: [...f.forward] };
+      if (prev) {
+        const dt = f.timestamp - prev.timestamp;
+        if (dt <= 0 || f.id === prev.id) return result("Waiting for a new camera frame");
+        const speed = Math.hypot(...f.position.map((v, i) => v - prev.position[i])) / dt;
+        if (dt <= 0.25 && speed > 0.25) return result("Move more slowly \u2014 keep sweeping");
+      }
+      if (this.done.has(slot.id)) return result("This view is saved \u2014 continue to a missing marker");
+      if (f.facePresent !== true) return result("Face not verified \u2014 keep the person in view");
+      if (f.framed !== true) return result("Keep the whole head inside the frame");
+      if (f.exposed !== true) return result("Improve lighting before continuing");
+      if (f.sharp !== true) return result("Image too soft \u2014 slow down or improve light");
+      if (!Number.isFinite(f.sharpnessScore) || !Number.isFinite(f.sharpnessReference) || f.sharpnessReference <= 0) return result("Calibrate sharpness before sweeping");
+      const score = 1 - Math.abs(az - slot.azimuth) / (spacing / 2) + 0.15 * Math.min(2, f.sharpnessScore / f.sharpnessReference);
+      if (!this.best || score > this.best.score) {
+        this.best = { slot: slot.id, frameId: f.id, score };
+        return result("Sweep slowly \u2014 selecting the best frame", true);
+      }
+      return result("Sweep slowly \u2014 selecting the best frame");
+    }
+  };
+
   // src/capture/guided-native.ts
   var planner = new GuidedOrbit();
+  var sweep = new GuidedSweep();
+  var sweeping = false;
   function initialise(count, arcDegrees = 360) {
     planner = new GuidedOrbit(count, arcDegrees, arcDegrees === 180);
+    sweep = new GuidedSweep(count);
+    sweeping = false;
   }
   function setCentre(json) {
     const v = JSON.parse(json);
     planner.setCentre(v.centre, v.radius, v.segment, v.frontAzimuth);
+    sweep.setCentre(v.centre, v.radius, v.segment, v.frontAzimuth);
   }
   function evaluateFrame(json) {
     return JSON.stringify(planner.update(JSON.parse(json)));
@@ -185,11 +301,21 @@ var GuidedNative = (() => {
   function evaluateDiagnosticFrame(json) {
     return JSON.stringify(planner.update(JSON.parse(json), false));
   }
+  function beginSweep(band) {
+    sweep.begin(band);
+    sweeping = true;
+  }
+  function evaluateSweep(json) {
+    return JSON.stringify(sweep.update(JSON.parse(json)));
+  }
+  function finishSweep() {
+    return JSON.stringify(sweep.finish());
+  }
   function acknowledge(token, generation, saved) {
-    return planner.acknowledge(token, generation, saved);
+    return sweeping ? sweep.acknowledge(token, generation, saved) : planner.acknowledge(token, generation, saved);
   }
   function coverage() {
-    return JSON.stringify(planner.coverage());
+    return JSON.stringify(sweeping ? sweep.coverage() : planner.coverage());
   }
   var reference = null;
   var calibration = [];
@@ -215,7 +341,7 @@ var GuidedNative = (() => {
       squares += lap * lap;
       n++;
     }
-    const sharpness = Math.max(0, squares / n - (sum / n) ** 2), exposed = dark < 0.4 && bright < 0.25;
+    const sharpness = s.detailSharpness !== void 0 && Number.isFinite(s.detailSharpness) && s.detailSharpness >= 0 ? s.detailSharpness : Math.max(0, squares / n - (sum / n) ** 2), exposed = dark < 0.4 && bright < 0.25;
     const prior = previous;
     previous = s;
     const continuous = prior !== null && s.timestamp > prior.timestamp && s.timestamp - prior.timestamp <= 0.25 && s.cameraStill && prior.cameraStill;

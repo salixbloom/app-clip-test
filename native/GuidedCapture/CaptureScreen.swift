@@ -16,7 +16,8 @@ final class CaptureScreenModel: ObservableObject {
     @Published var coverage = Array(repeating: false, count: 72)
     @Published var nextSlot: Int?
     @Published var running = false
-    @Published var photoTarget = 72
+    @Published var photoTarget = 128
+    @Published var selectedBand = 1
     @Published var automatic = false
     @Published var exporting = false
     @Published var flash = false
@@ -48,7 +49,7 @@ final class CaptureScreenModel: ObservableObject {
             native.onGuidance = { [weak self] text in
                 guard let data = text.data(using: .utf8), let v = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
                 self?.message = v["message"] as? String ?? "Waiting for camera"
-                self?.nextSlot = (v["next"] as? [String: Any])?["id"] as? Int
+                self?.nextSlot = v["candidateSlot"] as? Int ?? (v["next"] as? [String: Any])?["id"] as? Int
             }
             native.onPose = { [weak self] p, tracking in self?.position = p; self?.tracking = tracking }
             native.onCoverage = { [weak self] values in self?.coverage = values }
@@ -60,11 +61,13 @@ final class CaptureScreenModel: ObservableObject {
             native.onSaved = { [weak self] folder in
                 self?.savedFiles = [folder.appendingPathComponent("image.jpg"), folder.appendingPathComponent("metadata.json")]
                 self?.savedCount += 1
-                self?.flash = true
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds:150_000_000)
-                    self?.flash = false
+                if self?.automatic != true {
+                    self?.flash = true
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds:150_000_000)
+                        self?.flash = false
+                    }
                 }
             }
             marker.geometry?.firstMaterial?.diffuse.contents = UIColor.systemYellow
@@ -111,7 +114,9 @@ final class CaptureScreenModel: ObservableObject {
         centre = p; coverage = Array(repeating: false, count: photoTarget)
     }
     func toggleAutomatic() {
-        automatic.toggle(); controller?.setAutomatic(automatic)
+        automatic.toggle()
+        if automatic { controller?.startSweep(band:selectedBand) }
+        else { controller?.setAutomatic(false) }
     }
     func exportAll() {
         automatic = false; exporting = true
@@ -159,7 +164,7 @@ final class CaptureScreenModel: ObservableObject {
                 let count = model.photoTarget/3 + (band < model.photoTarget%3 ? 1 : 0)
                 let a = -Float.pi/2 + Float(local)*Float.pi/Float(count-1), e = Float(band-1)*Float.pi/12
                 let p = project(SIMD3<Float>(sin(a)*cos(e), sin(e), cos(a)*cos(e)))
-                let colour: Color = model.coverage.indices.contains(i) && model.coverage[i] ? .green : model.nextSlot == i ? .yellow : .gray
+                let colour: Color = model.coverage.indices.contains(i) && model.coverage[i] ? .green : model.nextSlot == i ? .yellow : band == model.selectedBand ? .orange : .gray.opacity(0.3)
                 context.fill(Path(ellipseIn: CGRect(x:p.x-2,y:p.y-2,width:4,height:4)), with: .color(colour))
             }
             let centre = CGPoint(x:size.width/2,y:size.height/2)
@@ -184,9 +189,9 @@ final class CaptureScreenModel: ObservableObject {
             VStack {
                 HStack(alignment:.top) {
                     VStack(alignment:.leading) {
-                        Text("Front 180° scan").font(.headline)
+                        Text("Front 180° continuous scan").font(.headline)
                         Text("Tracking: \(model.tracking)")
-                        Text(model.automatic ? "Automatic · experimental image checks" : "Manual / paused").font(.caption)
+                        Text(model.automatic ? "30 fps stream · selecting frames" : "Sweep paused").font(.caption)
                         Text("\(model.coverage.filter { $0 }.count)/\(model.photoTarget) positions saved").font(.caption)
                     }.padding().background(.black.opacity(0.75)).cornerRadius(12)
                     Spacer()
@@ -205,9 +210,12 @@ final class CaptureScreenModel: ObservableObject {
                         Button("Confirm scan centre") { model.confirm() }.disabled(model.candidate == nil || model.tracking != "normal")
                     }
                     if model.centre != nil {
-                        Button(model.automatic ? "Pause automatic capture" : "Calibrate & start automatic") { model.toggleAutomatic() }
+                        Picker("Height pass", selection:$model.selectedBand) {
+                            Text("Low").tag(0); Text("Level").tag(1); Text("High").tag(2)
+                        }.pickerStyle(.segmented).disabled(model.automatic)
+                        Button(model.automatic ? "Finish this pass" : "Calibrate & start pass") { model.toggleAutomatic() }
                             .disabled(model.tracking != "normal" || model.exporting)
-                        Text("Move between yellow markers. Hold the subject still; pause the camera at each marker. Cover all three rows: low, level, high.").font(.caption)
+                        Text("After calibration, sweep slowly profile to profile. Keep one neutral expression. Orange markers need a view; green views are saved. Finish the pass to save its final frame.").font(.caption)
                     }
                     HStack {
                         Button("Take photo") { model.controller?.requestDiagnosticFrame() }

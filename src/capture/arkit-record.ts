@@ -1,6 +1,6 @@
 /** Versioned experimental native archive boundary; independent of frozen CaptureFrame. */
 export interface ARKitRecord {
- schema:'arkit-image-record-v1';capturePurpose:'guided'|'diagnostic';sessionId:string;segment:string;frameId:string;timestamp:number;
+ schema:'arkit-image-record-v1';capturePurpose:'guided'|'diagnostic'|'sweep';sessionId:string;segment:string;frameId:string;timestamp:number;
  image:{file:string;width:number;height:number;sha256:string;orientation:'native-buffer';mirrored:false};
  cameraToWorld:number[];intrinsics:number[];matrixOrder:'column-major';units:'metres';
  axes:'arkit-right-handed-y-up-camera-negative-z-forward';tracking:'normal';
@@ -13,7 +13,7 @@ export function parseARKitRecord(value:unknown):ARKitRecord {
  const fail=()=>{throw new Error('Invalid ARKit image record');};
  const id=(s:unknown)=>typeof s==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(s);
  if(!v||v.schema!=='arkit-image-record-v1'||!id(v.sessionId)||!id(v.segment)||!id(v.frameId)||!Number.isFinite(v.timestamp)||v.timestamp<0)fail();
- if(v.capturePurpose!=='guided'&&v.capturePurpose!=='diagnostic')fail();
+ if(v.capturePurpose!=='guided'&&v.capturePurpose!=='diagnostic'&&v.capturePurpose!=='sweep')fail();
  if(v.units!=='metres'||v.matrixOrder!=='column-major'||v.axes!=='arkit-right-handed-y-up-camera-negative-z-forward'||v.tracking!=='normal'||v.scaleValidated!==false)fail();
  const image=v.image;
  if(!image||image.file!=='image.jpg'||!Number.isInteger(image.width)||!Number.isInteger(image.height)||image.width<1||image.height<1||!(/^[a-f0-9]{64}$/).test(image.sha256)||image.orientation!=='native-buffer'||image.mirrored!==false)fail();
@@ -41,6 +41,7 @@ export function projectARKitPoint(record:ARKitRecord,world:readonly[number,numbe
 /** Diagnostic captures must never be counted as quality-approved guided views. */
 export function parseGuidedARKitRecord(value:unknown):ARKitRecord {
  const record=parseARKitRecord(value);
- if(record.capturePurpose!=='guided')throw new Error('Diagnostic frame is not a guided capture');
+ if(record.capturePurpose==='diagnostic')throw new Error('Diagnostic frame is not a guided capture');
+ if(record.capturePurpose==='sweep')throw new Error('Sweep frame requires explicit sweep import');
  return record;
 }

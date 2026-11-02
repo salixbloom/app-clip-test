@@ -1,5 +1,9 @@
 # Front 180° capture workflow
 
+The current app uses [continuous sweep selection](CONTINUOUS-SCAN.md), targeting
+30 fps without per-photo dwell. The stop-at-marker behavior below describes the
+earlier acquisition mode and its retained portable planner, not the current UI.
+
 ## Capture
 
 One person sits still with a neutral expression; the operator moves the rear

@@ -1,5 +1,9 @@
 # Native front-half capture
 
+Current UI: [Continuous 30 fps stream selection](../CONTINUOUS-SCAN.md), three
+height passes, missing-view retakes and explicit PC head-crop normalization.
+This replaces the earlier stop-at-each-marker UI described by older device notes.
+
 The installed standalone capture app uses the rear camera and ARKit world tracking.
 This is an experimental acquisition tool for one stationary subject and a second
 person operating the phone. See [FRONT-SCAN.md](../FRONT-SCAN.md) for the complete

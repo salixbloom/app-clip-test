@@ -5,6 +5,7 @@ import CoreImage
 import ImageIO
 import CryptoKit
 import JavaScriptCore
+import Vision
 
 private struct LumaQuality {
     let sharpness: Double
@@ -23,6 +24,9 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
     private var segment = UUID().uuidString
     private var bridgeFailure = false
     private var automatic = false
+    private var sweepMode = false
+    private var streamFPS = 0
+    private var candidate: (frame: ARFrame, id: String, quality: LumaQuality?, bounds: CGRect?)?
     private var confirmedPoint: SIMD3<Float>?
     private var previousCamera: simd_float4x4?
     private var lastProcessed = -Double.infinity
@@ -62,9 +66,10 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
         configuration.isAutoFocusEnabled = true
-        if let format = ARWorldTrackingConfiguration.supportedVideoFormats.filter({ $0.framesPerSecond <= 30 }).max(by: {
+        if let format = ARWorldTrackingConfiguration.supportedVideoFormats.filter({ $0.framesPerSecond == 30 }).max(by: {
             $0.imageResolution.width * $0.imageResolution.height < $1.imageResolution.width * $1.imageResolution.height
         }) { configuration.videoFormat = format }
+        streamFPS = configuration.videoFormat.framesPerSecond
         queue.async { self.invalidateOrigin() }
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
     }
@@ -76,9 +81,46 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
 
     func setAutomatic(_ enabled: Bool) {
         queue.async {
+            if !enabled && self.sweepMode { self.finishSweep() }
             self.automatic = enabled
             self.bridge.invokeMethod("resetQuality", withArguments: [])
             self.referenceScore = nil
+        }
+    }
+
+    func startSweep(band: Int) {
+        queue.async {
+            guard self.centreConfirmed else { return }
+            if self.sweepMode { self.finishSweep() }
+            self.sweepMode = true
+            self.bridge.invokeMethod("beginSweep", withArguments: [band])
+            self.bridge.invokeMethod("resetQuality", withArguments: [])
+            self.referenceScore = nil; self.automatic = true
+        }
+    }
+    private func finishSweep() {
+        guard let text = bridge.invokeMethod("finishSweep", withArguments: [])?.toString(),
+              let data = text.data(using: .utf8),
+              let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        saveSweepTicket(result)
+        publish(bridge.invokeMethod("finishSweep", withArguments: [])?.toString() ?? text)
+        publishCoverage()
+    }
+    private func saveSweepTicket(_ result: [String: Any]) {
+        guard let ticket = result["ticket"] as? [String: Any], let token = ticket["token"] as? Int,
+              let generation = ticket["generation"] as? Int, let slot = ticket["slot"] as? Int else { return }
+        guard let saved = candidate, ticket["frameId"] as? String == saved.id else {
+            bridge.invokeMethod("acknowledge", withArguments: [token, generation, false]); return
+        }
+        candidate = nil
+        do {
+            let folder = try persist(saved.frame, id: saved.id, slot: slot, generation: generation,
+                                     tracking: "normal", quality: saved.quality, framed: true, subjectStill: nil,
+                                     purpose: "sweep", headBounds: saved.bounds)
+            bridge.invokeMethod("acknowledge", withArguments: [token, generation, true])
+            DispatchQueue.main.async { self.onSaved?(folder) }
+        } catch {
+            bridge.invokeMethod("acknowledge", withArguments: [token, generation, false]); reportSaveFailure(error)
         }
     }
 
@@ -93,6 +135,7 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             self.bridge.invokeMethod("setCentre", withArguments: [json])
             self.centreConfirmed = !self.bridgeFailure
             self.confirmedPoint = point; self.automatic = false; self.referenceScore = nil
+            self.candidate = nil; self.sweepMode = false
             self.scanPlan = ["schema": "front-head-capture-plan-v1", "count": count, "arcDegrees": 180,
                              "scanId": UUID().uuidString, "frontAzimuth": frontAzimuth, "radiusMetres": radiusMetres,
                              "centre": [Double(point.x), Double(point.y), Double(point.z)],
@@ -108,15 +151,18 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard !bridgeFailure else { publish("{\"message\":\"Capture planner unavailable\"}"); return }
-        guard frame.timestamp - lastProcessed >= 0.09 else { return }
+        guard frame.timestamp - lastProcessed >= (sweepMode ? 0.029 : 0.09) else { return }
+        let sampleInterval = frame.timestamp-lastProcessed
         lastProcessed = frame.timestamp
         let camera = frame.camera, transform = camera.transform
         let frameID = UUID().uuidString
-        let samples = sampleHead(frame)
+        let headBounds = sweepMode ? detectHead(frame.capturedImage) : nil
+        let samples = sweepMode && headBounds == nil ? nil : sampleHead(frame, bounds: headBounds)
         let cameraStill: Bool
         if let previous = previousCamera {
-            cameraStill = simd_distance(transform.columns.3, previous.columns.3) < 0.008 &&
-                simd_dot(transform.columns.2, previous.columns.2) > cos(Float.pi / 180)
+            cameraStill = sampleInterval > 0 && sampleInterval <= 0.25 &&
+                Double(simd_distance(transform.columns.3, previous.columns.3))/sampleInterval < 0.03 &&
+                simd_dot(transform.columns.2, previous.columns.2) > cos(Float(sampleInterval)*Float.pi/60)
         } else { cameraStill = false }
         previousCamera = transform
         let qualityInput: [String: Any] = ["timestamp": frame.timestamp, "pixels": samples ?? [], "framed": samples != nil, "cameraStill": cameraStill]
@@ -147,13 +193,29 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             // again as an automatic ticket in this callback.
             return
         }
-        let input: [String: Any] = [
+        var input: [String: Any] = [
             "id": frameID, "segment": segment, "timestamp": frame.timestamp,
             "position": [Double(transform.columns.3.x), Double(transform.columns.3.y), Double(transform.columns.3.z)],
             "forward": [-Double(transform.columns.2.x), -Double(transform.columns.2.y), -Double(transform.columns.2.z)],
             "tracking": tracking, "sharp": box(sharp), "exposed": box(exposed),
             "framed": box(framed), "subjectStill": box(still)
         ]
+        if automatic && sweepMode {
+            input["facePresent"] = headBounds != nil
+            input["sharpnessScore"] = luma?.sharpness ?? 0
+            input["sharpnessReference"] = referenceScore ?? 0
+            guard let text = json(input), let output = bridge.invokeMethod("evaluateSweep", withArguments: [text])?.toString(),
+                  let data = output.data(using: .utf8),
+                  let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], !bridgeFailure else { return }
+            // Save the OLD exact ARFrame before replacing the one retained candidate.
+            saveSweepTicket(result)
+            if result["keep"] as? Bool == true { candidate = (frame, frameID, luma, headBounds) }
+            if referenceScore == nil {
+                publish("{\"message\":\"Calibrating — hold camera and subject still in good light\"}")
+            } else { publish(output) }
+            publishCoverage()
+            return
+        }
         guard let inputJSON = json(input),
               let output = bridge.invokeMethod(automatic ? "evaluateFrame" : "evaluateDiagnosticFrame", withArguments: [inputJSON])?.toString(),
               !bridgeFailure,
@@ -185,6 +247,12 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         }
     }
 
+    private func publishCoverage() {
+        guard let text = bridge.invokeMethod("coverage", withArguments: [])?.toString(), let data = text.data(using: .utf8),
+              let values = (try? JSONSerialization.jsonObject(with: data)) as? [Bool] else { return }
+        DispatchQueue.main.async { self.onCoverage?(values) }
+    }
+
     private func reportSaveFailure(_ error: Error) {
         automatic = false
         let message = (error as? CaptureError) == .lowStorage
@@ -198,13 +266,14 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
     private func invalidateOrigin() {
         segment = UUID().uuidString; centreConfirmed = false; diagnosticRequested = false
         automatic = false; confirmedPoint = nil; previousCamera = nil; lastProcessed = -Double.infinity
+        candidate = nil; sweepMode = false
         bridge.invokeMethod("resetQuality", withArguments: [])
         DispatchQueue.main.async { self.onOriginChanged?() }
     }
 
     private func persist(_ frame: ARFrame, id: String, slot: Int, generation: Int,
                          tracking: String, quality: LumaQuality?, framed: Bool?, subjectStill: Bool?,
-                         purpose: String = "guided") throws -> URL {
+                         purpose: String = "guided", headBounds: CGRect? = nil) throws -> URL {
         let fm = FileManager.default
         let capacity = try archiveRoot.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
         if let capacity, capacity < 100_000_000 { throw CaptureError.lowStorage }
@@ -232,7 +301,10 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             "cameraToWorld": (0..<4).flatMap { c in (0..<4).map { r in Double(m[c][r]) } },
             "intrinsics": (0..<3).flatMap { c in (0..<3).map { r in Double(k[c][r]) } },
             "matrixOrder": "column-major", "units": "metres", "tracking": tracking,
-            "capturePlan": scanPlan, "qualityMethod": "experimental-projected-head-roi-v1",
+            "capturePlan": scanPlan, "qualityMethod": purpose == "sweep" ? "experimental-vision-head-sweep-v1" : "experimental-projected-head-roi-v1",
+            "headBoundsNative": headBounds.map { [$0.origin.x, $0.origin.y, $0.width, $0.height] as Any } ?? NSNull(),
+            "subjectMotionMethod": purpose == "sweep" ? "not-measured-during-camera-motion" : "short-term-photometric",
+            "cameraStreamFPS": streamFPS,
             "qualityReference": referenceScore.map { $0 as Any } ?? NSNull(),
             "axes": "arkit-right-handed-y-up-camera-negative-z-forward", "scaleValidated": false,
             "quality": ["sharpnessScore": quality.map { $0.sharpness as Any } ?? NSNull(),
@@ -258,7 +330,7 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
 
     /// Approximate head envelope around the user-confirmed point, in native buffer axes.
     /// This is geometric framing plus photometric stability, not face identity/motion tracking.
-    private func sampleHead(_ frame: ARFrame) -> [Double]? {
+    private func sampleHead(_ frame: ARFrame, bounds: CGRect? = nil) -> [Double]? {
         guard let centre = confirmedPoint else { return nil }
         let buffer = frame.capturedImage
         let inverse = simd_inverse(frame.camera.transform), k = frame.camera.intrinsics
@@ -277,8 +349,8 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             }
         }
         guard let left = xs.min(), let right = xs.max(), let top = ys.min(), let bottom = ys.max() else { return nil }
-        let cx = (left+right)/2, cy = (top+bottom)/2
-        let halfWidth = (right-left)/2, halfHeight = (bottom-top)/2
+        let cx = bounds.map { Double($0.midX) } ?? (left+right)/2, cy = bounds.map { Double($0.midY) } ?? (top+bottom)/2
+        let halfWidth = bounds.map { Double($0.width)/2 } ?? (right-left)/2, halfHeight = bounds.map { Double($0.height)/2 } ?? (bottom-top)/2
         let format = CVPixelBufferGetPixelFormatType(buffer)
         guard format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange else { return nil }
         guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
@@ -303,9 +375,25 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         return pixels
     }
 
+    /// Portrait rear camera: Vision upright bbox -> original landscape buffer pixels.
+    /// Reject multiple faces and clipped expanded head estimates; never use a stale detection.
+    private func detectHead(_ buffer: CVPixelBuffer) -> CGRect? {
+        let request = VNDetectFaceRectanglesRequest()
+        do { try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .right).perform([request]) }
+        catch { return nil }
+        guard let faces = request.results, faces.count == 1, let face = faces.first, face.confidence >= 0.6 else { return nil }
+        let box = face.boundingBox
+        let expanded = CGRect(x: box.minX-box.width*0.4, y: box.minY-box.height*0.35,
+                              width: box.width*1.8, height: box.height*2.0)
+        guard expanded.minX > 0.005, expanded.minY > 0.005, expanded.maxX < 0.995, expanded.maxY < 0.995 else { return nil }
+        let w = CGFloat(CVPixelBufferGetWidth(buffer)), h = CGFloat(CVPixelBufferGetHeight(buffer))
+        return CGRect(x: (1-expanded.maxY)*w, y: (1-expanded.maxX)*h, width: expanded.height*w, height: expanded.width*h)
+    }
+
     /// Serial queue prevents writes while Foundation snapshots all retained sessions.
     func exportArchive(completion: @escaping @MainActor (URL?, String?) -> Void) {
         queue.async {
+            if self.sweepMode { self.finishSweep() }
             self.automatic = false
             var coordinationError: NSError?
             var copyError: Error?
