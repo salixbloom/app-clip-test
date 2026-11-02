@@ -213,8 +213,12 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             // Save the OLD exact ARFrame before replacing the one retained candidate.
             saveSweepTicket(result)
             if result["keep"] as? Bool == true { candidate = (frame, frameID, luma, headBounds) }
-            if referenceScore == nil {
-                publish("{\"message\":\"Calibrating — hold camera and subject still in good light\"}")
+            if referenceScore == nil && headBounds != nil && exposed == true {
+                if (luma?.sharpness ?? 0) < 12 {
+                    publish("{\"message\":\"Calibration image lacks detail — check focus and lighting\"}")
+                } else {
+                    publish("{\"message\":\"Calibrating — hold still briefly (\(quality["calibrationFrames"] as? Int ?? 0)/12)\"}")
+                }
             } else { publish(output) }
             publishCoverage()
             return

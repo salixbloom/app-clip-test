@@ -1,5 +1,10 @@
 # Free-account device test route
 
+Current capture UI and device test: [continuous sweep workflow](CONTINUOUS-SCAN.md).
+Use **Calibrate & start pass**, select a height row, sweep without per-marker
+stops, then **Finish this pass** and retake only remaining orange markers.
+The older stop-at-marker/manual wording below is retained for prior builds.
+
 2026-11-01: user has a free Apple Account, Windows, and GitHub macOS compilation.
 `CaptureDeviceTest` is a standard development app containing the same camera,
 planner and diagnostic screen. It has no embedded App Clip, target dependency,
