@@ -21,6 +21,7 @@ final class CaptureScreenModel: ObservableObject {
     @Published var exporting = false
     @Published var flash = false
     @Published var frontAzimuth = 0.0
+    @Published var confirmedRadius: Float = 1
     @Published var failure: String?
     var controller: ARKitCaptureController?
     weak var preview: ARSCNView?
@@ -105,6 +106,7 @@ final class CaptureScreenModel: ObservableObject {
         guard (0.5...1.5).contains(radius) else { message = "Move to 0.5–1.5 metres before confirming"; return }
         let offset = position-p
         frontAzimuth = Double(atan2(offset.x, offset.z))
+        confirmedRadius = Float(radius)
         controller?.confirmCentre(p, radiusMetres: radius, count: photoTarget, frontAzimuth: frontAzimuth)
         centre = p; coverage = Array(repeating: false, count: photoTarget)
     }
@@ -163,7 +165,7 @@ final class CaptureScreenModel: ObservableObject {
             let centre = CGPoint(x:size.width/2,y:size.height/2)
             context.fill(Path(ellipseIn: CGRect(x:centre.x-6,y:centre.y-10,width:12,height:20)), with: .color(.white))
             if let target = model.centre {
-                let d = model.position-target, a = Float(model.frontAzimuth)
+                let d = (model.position-target)/model.confirmedRadius, a = Float(model.frontAzimuth)
                 let p = project(SIMD3<Float>(cos(a)*d.x-sin(a)*d.z,d.y,sin(a)*d.x+cos(a)*d.z))
                 context.fill(Path(CGRect(x:p.x-4,y:p.y-6,width:8,height:12)), with: .color(.cyan))
             }
