@@ -4,6 +4,24 @@ const frame=(t:number,patch:Partial<OrbitFrame>={}):OrbitFrame=>({id:String(t),t
 function planner(){const p=new GuidedOrbit();p.setCentre([0,0,0],1,'a');return p;}
 function dwell(p:GuidedOrbit,start=0,patch:Partial<OrbitFrame>={}){let result=p.update(frame(start,patch));for(let i=1;i<=9&&!result.ticket;i++)result=p.update(frame(start+i*.1,patch));return result;}
 describe('two-person guided capture',()=>{
+ it('covers only the front half including both profiles, in any world heading',()=>{
+  for(const count of [24,64,72,128]){
+   const p=new GuidedOrbit(count,180),heading=2.8;p.setCentre([2,1,-3],1,'a',heading);
+   const slots=orbitSlots(count,180);
+   for(const band of new Set(slots.map(s=>s.elevation))){const row=slots.filter(s=>s.elevation===band);expect(row[0]!.azimuth).toBeCloseTo(-Math.PI/2);expect(row.at(-1)!.azimuth).toBeCloseTo(Math.PI/2);}
+   let t=0;
+   for(const slot of slots){
+    const a=slot.azimuth+heading,e=slot.elevation,offset=[Math.sin(a)*Math.cos(e),Math.sin(e),Math.cos(a)*Math.cos(e)] as const;
+    const r=dwell(p,t,{position:[2+offset[0],1+offset[1],-3+offset[2]],forward:[-offset[0],-offset[1],-offset[2]]});
+    expect(r.ticket?.slot).toBe(slot.id);p.acknowledge(r.ticket!.token,r.ticket!.generation,true);t+=2;
+   }
+   expect(p.coverage().filter(Boolean)).toHaveLength(count);expect(p.update(frame(t)).message).toBe('Capture complete');
+  }
+ });
+ it('never issues front-half tickets from the unobserved rear',()=>{
+  const p=new GuidedOrbit(24,180);p.setCentre([0,0,0],1,'a');
+  expect(dwell(p,0,{position:[0,0,-1],forward:[0,0,1]}).ticket).toBeNull();
+ });
  it('does not call an unavailable movement detector detected movement',()=>{
   expect(planner().update(frame(0,{subjectStill:null})).message).toContain('unavailable');
   expect(planner().update(frame(0,{subjectStill:false})).message).toContain('Subject moved');

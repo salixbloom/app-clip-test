@@ -34,14 +34,14 @@ purchase, device registration or certificate operation has been performed.
 
 After successful personal signing/installation, enable Developer Mode if iOS
 requests it, grant camera permission, verify normal tracking, confirm the scan
-centre, and save/share one diagnostic JPEG/JSON pair. Automatic guided capture
-remains disabled pending quality detectors and threshold validation. Diagnostic
+centre, and save/share one diagnostic JPEG/JSON pair. The front-half revision offers calibrated experimental automatic capture; see
+FRONT-SCAN.md for initial thresholds and remaining hardware validation. Diagnostic
 images never count as approved coverage.
 
-The test screen exposes a **Take photo** button and a saved-photo count. Confirm
-the centre and wait for normal tracking before using it. Manual preview does not
-require automatic quality-detector results: those detectors are not connected
-yet. A missing subject-motion result must never be reported as detected motion.
+The test screen exposes **Take photo**, a saved count, **Calibrate & start
+automatic**, and **Export all scans**. Confirm the centre and wait for normal
+tracking. Manual preview does not require passing automatic image checks. A missing
+movement result must never be reported as detected motion.
 Automatic mode continues to refuse unknown checks and never counts manual photos
 as guided coverage.
 

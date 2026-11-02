@@ -1,135 +1,57 @@
-# Native guided capture scaffold
+# Native front-half capture
 
-Status (2026-11-01): native screen/controller and generated host+App Clip Xcode
-project compiled successfully on GitHub macOS in both simulator and unsigned
-iPhone SDK builds. [First successful run](https://github.com/salixbloom/app-clip-test/actions/runs/41359514597)
-at source commit `c2724b737e875e5192c686690522201568d03bbd`.
-Neither target has been signed or run on an iPhone. This Windows workspace has
-no local macOS/iOS SDK; compilation success is not a hardware/quality test.
+The installed standalone capture app uses the rear camera and ARKit world tracking.
+This is an experimental acquisition tool for one stationary subject and a second
+person operating the phone. See [FRONT-SCAN.md](../FRONT-SCAN.md) for the complete
+capture/export/import workflow and limitations. It does not predict surgical outcomes.
 
-`ARKitCaptureController.swift` connects rear-camera world tracking to the exact
-planner used by the desktop simulator through bundled JavaScriptCore. There is
-no remote JavaScript, WebView, network call or duplicated Swift planner.
+The previous manual-only build ran on the user's iPhone. This revision adds a
+front 180-degree guided scan; hardware quality and usability need testing again.
+GitHub macOS compiles simulator, unsigned iPhone host/Clip, and standalone targets.
+A successful compile does not validate captured geometry or camera scale.
 
-Implemented source paths:
+## Source and data
 
-- Per-frame ARKit position/negative-Z forward vector, timestamp, tracking state.
-- New origin segment on start/interruption/failure; explicit centre confirmation.
-- Initial luma-plane Laplacian variance and clipped-dark/bright fractions, with
-  video-range conversion. These are whole-image scores: background texture or
-  noise can fool sharpness; they are not a validated head-focused quality test.
-- Quality policy and head-framing/subject-still provider default to unknown;
-  capture stays blocked. There are no fabricated passing detector outputs.
-- Same-callback ARFrame JPEG, native pixel dimensions, column-major camera-to-world
-  transform in metres and pinhole intrinsics. No image resize, crop or rotation.
-- SHA256 image hash and `arkit-image-record-v1` JSON; pair staged in `.pending-*`,
-  each file synchronized, then directory renamed. Failed writes never complete
-  an orbit marker. Importers must ignore incomplete staging directories.
-- Live portrait camera screen, runtime camera permission, tracking status,
-  projected 3D orbit inset, and centre candidate marker. Tap direction uses the
-  viewport camera projection, with a user-specified approximate distance.
-  Centre confirmation does not claim measured depth or camera calibration.
-- Explicit manual diagnostic-frame save and system share sheet for the local
-  JPEG/JSON pair. Diagnostics carry `capturePurpose: diagnostic`; they never
-  acknowledge a guided ticket or complete an orbit slot. The guided-only reader
-  refuses diagnostic records. Automatic capture stays disabled in this UI.
+- `ARKitCaptureController.swift`: rear-camera tracking, highest supported <=30fps
+  format, autofocus, same-frame native JPEG/K/pose, head-region sampling, serial
+  storage, free-space check, all-session ZIP export.
+- `CaptureScreen.swift`: front-direction/approximate-distance confirmation,
+  24/48/64/72/96/128 targets, three-row inset, manual capture, calibrated automatic
+  mode, saved count, haptic/flash feedback, local sharing, retained archive count.
+- `Resources/GuidedNative.js`: generated from `src/capture/guided-native.ts` and
+  the shared planner. No remote JavaScript, website dependency or network upload.
 
-Archive layout beneath the host-supplied private local root:
+Every committed frame is `<session>/<origin>/<frame>/image.jpg` + `metadata.json`.
+Photos retain native pixel orientation, dimensions, intrinsics, SHA256 and
+right-handed Y-up metre camera-to-world pose from the exact ARFrame callback.
+A hidden staging directory is renamed only after both files are synchronized.
+Failed saves never complete a marker. Manual frames remain `diagnostic` and do
+not fill guided coverage. Recentring creates a unique scanId and resets markers;
+tracking interruptions create a new origin. Earlier photos are never discarded.
 
-    <session UUID>/<origin segment UUID>/<frame UUID>/image.jpg
-    <session UUID>/<origin segment UUID>/<frame UUID>/metadata.json
+The archive remains in private Application Support storage across launches.
+Uninstalling the app can delete it: export a separate ZIP before removal.
+The new app counts committed archived pairs on launch but never resumes old AR
+coordinates. Export includes all retained sessions and their original scan plans.
+There is no automatic cloud backup or configured backend endpoint.
 
-The folder rename is the application commit boundary. Power-loss/filesystem
-durability and iOS data protection require device testing; do not promise this
-as a permanent archive. Original images stay paired with original K/pose.
-Slot, generation, origin segment and timestamp are separate identifiers. Raw
-captures from separate origin segments must not be merged without alignment.
+## Build and verification
 
-## Build the planner resource
+Use the existing `ffs-planner-check` container mounted at `/app`, with its own
+`/app/node_modules` volume:
 
-Run inside existing `ffs-planner-check` container with repo `/app`, working dir
-`/app`, and container-owned `/app/node_modules`:
+```
+node_modules/.bin/esbuild src/capture/guided-native.ts --bundle --format=iife --global-name=GuidedNative --platform=neutral --target=es2020 --outfile=native/GuidedCapture/Resources/GuidedNative.js
+node tools/test-native-bundle.mjs
+npm run check
+```
 
-    node_modules/.bin/esbuild src/capture/guided-native.ts --bundle --format=iife --global-name=GuidedNative --platform=neutral --target=es2020 --outfile=native/GuidedCapture/Resources/GuidedNative.js
-    node tools/test-native-bundle.mjs
-    npm run check
+`tools/metahuman/generate_native_project.py` generates the host, embedded Clip and
+standalone personal-signing test target. Do not regenerate over real signing
+settings without reviewing the result. Windows has no local iOS SDK; see
+[GITHUB-BUILD.md](../GITHUB-BUILD.md) and [DEVICE-TEST.md](../DEVICE-TEST.md).
 
-The 8.5KB resource is generated from project source. The clean-context test runs
-the exact IIFE without DOM, fetch or Node globals. It is not JavaScriptCore or
-hardware validation. Native record parsing/projection tests live under
-`src/capture/guided-native.test.ts`.
-
-## Generated device project
-
-Open `native/GuidedCaptureDevice.xcodeproj` on a Mac. It contains shared
-`CaptureHost` and `CaptureClip` schemes, both iOS16+/portrait/Swift5. Start with
-CaptureHost on an attached iPhone to validate the camera/storage path before
-debugging App Clip invocation. Host installation is a development step; the
-intended end-user flow remains App Clip invocation without installing the host.
-
-`CaptureDeviceTest` is an additional standalone scheme for free-account personal
-sideloading experiments. It has no Clip dependency/embedding or Clip entitlements.
-The workflow packages its unsigned IPA; see `native/DEVICE-TEST.md`. It is not
-automatically signed, installed, or validated by compilation.
-
-The project uses placeholder identifiers `com.example.FFSCapture` and `.Clip`.
-Select the Apple development team, replace both bundle identifiers AND matching
-parent/Clip entitlement values, and configure actual invocation/associated
-domains before App Clip distribution. The Clip scheme's `_XCAppClipURL` uses
-`https://example.invalid/capture` deliberately; it is not a deployed invocation.
-The host embeds and depends on the Clip. No account, provisioning profile,
-external domain, credential or upload destination is included.
-For GitHub compilation workflow and native-only repository contents, see
-`native/GITHUB-BUILD.md`. Published branch: `codex/native-capture`.
-
-Regenerate the deterministic Xcode project/Info/entitlements/schemes in the
-reconstruction container using:
-
-    python tools/metahuman/generate_native_project.py
-
-Regeneration overwrites project signing/bundle configuration placeholders;
-preserve any local signing changes before regenerating. The generator validates
-object references, source/resource paths and plist structure, not Xcode semantics.
-
-On macOS, an unsigned simulator SDK build can first check compilation:
-
-    xcodebuild -project native/GuidedCaptureDevice.xcodeproj -scheme CaptureHost -destination 'generic/platform=iOS Simulator' -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
-
-This command has not run locally; the equivalent workflow passed remotely.
-ARKit tracking itself still requires an iPhone. Both target compilation and
-resource embedding passed the workflow; runtime behavior remains unverified.
-
-## Device milestone and remaining integration
-
-Load the bundled resource as a String, construct the controller with a private
-Application Support capture directory, and wire `onGuidance` to the overlay.
-All planner calls and file writes run on a serial delegate queue; UI callbacks
-arrive on main. Do not read `session.currentFrame` when a ticket fires.
-
-First device sequence: allow camera, wait for normal tracking, tap the stationary
-subject's head, adjust approximate distance, verify the marker stays at the head
-while moving slightly, confirm centre, save one diagnostic frame, and share the
-saved pair for independent hash/dimension/projection checks. Movement that makes
-the point slide relative to the head indicates wrong centre/depth or tracking.
-Diagnostic saves deliberately allow unknown quality scores and do not establish
-facial accuracy or suitable reconstruction coverage.
-
-Still implement head-aware framing/movement checks across profiles/back views,
-validated quality thresholds, depth-assisted centre verification, disk-space/error
-recovery, local archive restoration and foreground upload. Lifecycle background
-pauses stop the camera and require a new centre after restart.
-The archive is local only; no endpoint/credentials or real-face transfer exists.
-The `src/capture/arkit-record.ts` parser enforces metadata geometry/provenance,
-but archive image hash and decoded JPEG dimensions must also be checked on import.
-
-Before any real reconstruction: compile in Xcode; exercise permissions, camera
-buffer orientation, projection against visible targets, normal/limited tracking,
-interruption/reset/recentre, storage failure, exact-frame pairing, and transfer
-retry behavior on a physical iPhone. ARKit metre poses are unvalidated scale,
-not reference-object evidence or facial/surgical accuracy clearance.
-
-Apple references checked 2026-11-01:
-
-- https://developer.apple.com/documentation/arkit/arframe
-- https://developer.apple.com/documentation/arkit/arcamera
-- https://developer.apple.com/documentation/javascriptcore/jscontext
+Physical-device checks remain required for actual image/pose alignment, head ROI
+alignment, realistic handheld dwell, lighting changes, expressions, profiles,
+storage errors and exported files. Image stability is a photometric heuristic,
+not a face/identity tracker. No anatomical or clinical accuracy is established.

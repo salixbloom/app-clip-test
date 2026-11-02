@@ -6,13 +6,6 @@ import ImageIO
 import CryptoKit
 import JavaScriptCore
 
-struct ImageQualityPolicy {
-    // Device/lighting dependent; no unvalidated default silently enables capture.
-    let minimumLaplacianVariance: Double
-    let maximumDarkFraction: Double
-    let maximumBrightFraction: Double
-}
-
 private struct LumaQuality {
     let sharpness: Double
     let dark: Double
@@ -29,8 +22,12 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
     private let sessionID = UUID().uuidString
     private var segment = UUID().uuidString
     private var bridgeFailure = false
-    private var policy: ImageQualityPolicy?
-    private var qualityProvider: ((ARFrame) -> (framed: Bool?, subjectStill: Bool?))?
+    private var automatic = false
+    private var confirmedPoint: SIMD3<Float>?
+    private var previousCamera: simd_float4x4?
+    private var lastProcessed = -Double.infinity
+    private var referenceScore: Double?
+    private var scanPlan: [String: Any] = [:]
     private var diagnosticRequested = false
     private var centreConfirmed = false
     /// UI receives planner JSON on main queue; never use this callback to select a newer image.
@@ -39,6 +36,7 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
     var onSaved: (@MainActor (URL) -> Void)?
     var onOriginChanged: (@MainActor () -> Void)?
     var onCoverage: (@MainActor ([Bool]) -> Void)?
+    var onFailure: (@MainActor (String) -> Void)?
 
     init(archiveRoot: URL, bundledPlanner: String, count: Int = 72) throws {
         self.archiveRoot = archiveRoot
@@ -51,7 +49,7 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             js.evaluateScript(bundledPlanner)
             bridge = js.objectForKeyedSubscript("GuidedNative")
             guard !bridgeFailure, bridge != nil, !bridge.isUndefined else { throw CaptureError.javascriptUnavailable }
-            bridge.invokeMethod("initialise", withArguments: [count])
+            bridge.invokeMethod("initialise", withArguments: [count, 180])
             if bridgeFailure { throw CaptureError.javascriptUnavailable }
         }
         session.delegateQueue = queue
@@ -63,6 +61,10 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         // Camera permission belongs to the host UI before this call.
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
+        configuration.isAutoFocusEnabled = true
+        if let format = ARWorldTrackingConfiguration.supportedVideoFormats.filter({ $0.framesPerSecond <= 30 }).max(by: {
+            $0.imageResolution.width * $0.imageResolution.height < $1.imageResolution.width * $1.imageResolution.height
+        }) { configuration.videoFormat = format }
         queue.async { self.invalidateOrigin() }
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
     }
@@ -72,30 +74,61 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
     /// Deliberate hardware diagnostic, never a quality-approved orbit capture.
     func requestDiagnosticFrame() { queue.async { self.diagnosticRequested = true } }
 
-    func configureQuality(policy: ImageQualityPolicy?,
-                          provider: ((ARFrame) -> (framed: Bool?, subjectStill: Bool?))?) {
-        queue.async { self.policy = policy; self.qualityProvider = provider }
+    func setAutomatic(_ enabled: Bool) {
+        queue.async {
+            self.automatic = enabled
+            self.bridge.invokeMethod("resetQuality", withArguments: [])
+            self.referenceScore = nil
+        }
     }
 
     /// Host must obtain AND confirm a subject-space point; a random raycast plane is insufficient.
-    func confirmCentre(_ point: SIMD3<Float>, radiusMetres: Double) {
+    func confirmCentre(_ point: SIMD3<Float>, radiusMetres: Double, count: Int, frontAzimuth: Double) {
         queue.async {
-            guard !self.bridgeFailure,
+            guard (24...128).contains(count), !self.bridgeFailure,
                   let json = self.json(["centre": [Double(point.x), Double(point.y), Double(point.z)],
-                                        "radius": radiusMetres, "segment": self.segment]) else { return }
+                                        "radius": radiusMetres, "segment": self.segment, "frontAzimuth": frontAzimuth]) else { return }
+            self.bridge.invokeMethod("initialise", withArguments: [count, 180])
+            self.bridge.invokeMethod("resetQuality", withArguments: [])
             self.bridge.invokeMethod("setCentre", withArguments: [json])
             self.centreConfirmed = !self.bridgeFailure
+            self.confirmedPoint = point; self.automatic = false; self.referenceScore = nil
+            self.scanPlan = ["schema": "front-head-capture-plan-v1", "count": count, "arcDegrees": 180,
+                             "scanId": UUID().uuidString, "frontAzimuth": frontAzimuth, "radiusMetres": radiusMetres,
+                             "centre": [Double(point.x), Double(point.y), Double(point.z)],
+                             "elevationsDegrees": [-15, 0, 15], "rearGeometry": "unobserved-template-completion-only",
+                             "qualityMethod": "experimental-projected-head-roi-v1", "scaleValidated": false]
+            do {
+                let folder = self.archiveRoot.appendingPathComponent(self.sessionID).appendingPathComponent(self.segment)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try self.syncedWrite(JSONSerialization.data(withJSONObject: self.scanPlan, options: [.sortedKeys]), to: folder.appendingPathComponent("plan-" + UUID().uuidString + ".json"))
+            } catch { self.automatic = false; self.centreConfirmed = false; self.publish("{\"message\":\"Could not save scan plan — confirm centre again\"}") }
         }
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard !bridgeFailure else { publish("{\"message\":\"Capture planner unavailable\"}"); return }
+        guard frame.timestamp - lastProcessed >= 0.09 else { return }
+        lastProcessed = frame.timestamp
         let camera = frame.camera, transform = camera.transform
         let frameID = UUID().uuidString
-        let luma = measureLuma(frame.capturedImage)
-        let checks = qualityProvider?(frame)
-        let sharp: Bool? = policy.flatMap { p in luma.map { $0.sharpness >= p.minimumLaplacianVariance } }
-        let exposed: Bool? = policy.flatMap { p in luma.map { $0.dark <= p.maximumDarkFraction && $0.bright <= p.maximumBrightFraction } }
+        let samples = sampleHead(frame)
+        let cameraStill: Bool
+        if let previous = previousCamera {
+            cameraStill = simd_distance(transform.columns.3, previous.columns.3) < 0.008 &&
+                simd_dot(transform.columns.2, previous.columns.2) > cos(Float.pi / 180)
+        } else { cameraStill = false }
+        previousCamera = transform
+        let qualityInput: [String: Any] = ["timestamp": frame.timestamp, "pixels": samples ?? [], "framed": samples != nil, "cameraStill": cameraStill]
+        let qualityJSON = json(qualityInput) ?? "{}"
+        let qualityString = bridge.invokeMethod("evaluateQuality", withArguments: [qualityJSON])?.toString() ?? "{}"
+        let quality = (qualityString.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] ?? [:]
+        let sharp = quality["sharp"] as? Bool, exposed = quality["exposed"] as? Bool
+        let framed = quality["framed"] as? Bool, still = quality["subjectStill"] as? Bool
+        referenceScore = quality["reference"] as? Double
+        let luma = (quality["sharpnessScore"] as? Double).map {
+            LumaQuality(sharpness: $0, dark: quality["darkFraction"] as? Double ?? 1, bright: quality["brightFraction"] as? Double ?? 1)
+        }
         let tracking: String
         switch camera.trackingState { case .normal: tracking = "normal"; case .limited: tracking = "limited"; case .notAvailable: tracking = "unavailable" }
         let position = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
@@ -105,10 +138,10 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             if centreConfirmed && tracking == "normal" {
                 do {
                     let url = try persist(frame, id: frameID, slot: 0, generation: 1, tracking: tracking,
-                                          quality: luma, framed: checks?.framed, subjectStill: checks?.subjectStill,
+                                          quality: luma, framed: framed, subjectStill: still,
                                           purpose: "diagnostic")
                     DispatchQueue.main.async { self.onSaved?(url) }
-                } catch { publish("{\"message\":\"Diagnostic save failed\"}") }
+                } catch { reportSaveFailure(error) }
             } else { publish("{\"message\":\"Confirm centre and wait for normal tracking first\"}") }
         }
         let input: [String: Any] = [
@@ -116,14 +149,16 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             "position": [Double(transform.columns.3.x), Double(transform.columns.3.y), Double(transform.columns.3.z)],
             "forward": [-Double(transform.columns.2.x), -Double(transform.columns.2.y), -Double(transform.columns.2.z)],
             "tracking": tracking, "sharp": box(sharp), "exposed": box(exposed),
-            "framed": box(checks?.framed), "subjectStill": box(checks?.subjectStill)
+            "framed": box(framed), "subjectStill": box(still)
         ]
         guard let inputJSON = json(input),
-              let output = bridge.invokeMethod(policy == nil || qualityProvider == nil ? "evaluateDiagnosticFrame" : "evaluateFrame", withArguments: [inputJSON])?.toString(),
+              let output = bridge.invokeMethod(automatic ? "evaluateFrame" : "evaluateDiagnosticFrame", withArguments: [inputJSON])?.toString(),
               !bridgeFailure,
               let bytes = output.data(using: .utf8),
               let result = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { return }
-        publish(output)
+        if automatic && referenceScore == nil && samples != nil && tracking == "normal" {
+            publish("{\"message\":\"Calibrating image checks — hold still in good light (\(quality["calibrationFrames"] as? Int ?? 0)/12)\"}")
+        } else { publish(output) }
         if let coverageJSON = bridge.invokeMethod("coverage", withArguments: [])?.toString(),
            let data = coverageJSON.data(using: .utf8),
            let values = (try? JSONSerialization.jsonObject(with: data)) as? [Bool] {
@@ -138,19 +173,29 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         do {
             // Synchronous serial-queue archive uses THIS callback frame, not session.currentFrame.
             let url = try persist(frame, id: frameID, slot: slot, generation: generation,
-                        tracking: tracking, quality: luma, framed: checks?.framed, subjectStill: checks?.subjectStill)
+                        tracking: tracking, quality: luma, framed: framed, subjectStill: still)
             bridge.invokeMethod("acknowledge", withArguments: [token, generation, true])
             DispatchQueue.main.async { self.onSaved?(url) }
         } catch {
             bridge.invokeMethod("acknowledge", withArguments: [token, generation, false])
-            publish("{\"message\":\"Photo could not be saved — hold position to retry\"}")
+            reportSaveFailure(error)
         }
+    }
+
+    private func reportSaveFailure(_ error: Error) {
+        automatic = false
+        let message = (error as? CaptureError) == .lowStorage
+            ? "Storage is nearly full. Export your scans and free space before continuing."
+            : "Photo could not be saved. Earlier photos are retained. Check storage before retrying."
+        DispatchQueue.main.async { self.onFailure?(message) }
     }
 
     func sessionWasInterrupted(_ session: ARSession) { invalidateOrigin() }
     func session(_ session: ARSession, didFailWithError error: Error) { invalidateOrigin() }
     private func invalidateOrigin() {
         segment = UUID().uuidString; centreConfirmed = false; diagnosticRequested = false
+        automatic = false; confirmedPoint = nil; previousCamera = nil; lastProcessed = -Double.infinity
+        bridge.invokeMethod("resetQuality", withArguments: [])
         DispatchQueue.main.async { self.onOriginChanged?() }
     }
 
@@ -158,6 +203,8 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
                          tracking: String, quality: LumaQuality?, framed: Bool?, subjectStill: Bool?,
                          purpose: String = "guided") throws -> URL {
         let fm = FileManager.default
+        let capacity = try archiveRoot.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
+        if let capacity, capacity < 100_000_000 { throw CaptureError.lowStorage }
         let parent = archiveRoot.appendingPathComponent(sessionID).appendingPathComponent(segment)
         try fm.createDirectory(at: parent, withIntermediateDirectories: true)
         let staging = parent.appendingPathComponent(".pending-" + id)
@@ -182,6 +229,8 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             "cameraToWorld": (0..<4).flatMap { c in (0..<4).map { r in Double(m[c][r]) } },
             "intrinsics": (0..<3).flatMap { c in (0..<3).map { r in Double(k[c][r]) } },
             "matrixOrder": "column-major", "units": "metres", "tracking": tracking,
+            "capturePlan": scanPlan, "qualityMethod": "experimental-projected-head-roi-v1",
+            "qualityReference": referenceScore.map { $0 as Any } ?? NSNull(),
             "axes": "arkit-right-handed-y-up-camera-negative-z-forward", "scaleValidated": false,
             "quality": ["sharpnessScore": quality.map { $0.sharpness as Any } ?? NSNull(),
                         "darkFraction": quality.map { $0.dark as Any } ?? NSNull(),
@@ -204,7 +253,18 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         try handle.synchronize()
     }
 
-    private func measureLuma(_ buffer: CVPixelBuffer) -> LumaQuality? {
+    /// Approximate head envelope around the user-confirmed point, in native buffer axes.
+    /// This is geometric framing plus photometric stability, not face identity/motion tracking.
+    private func sampleHead(_ frame: ARFrame) -> [Double]? {
+        guard let centre = confirmedPoint else { return nil }
+        let buffer = frame.capturedImage
+        let point = simd_inverse(frame.camera.transform) * SIMD4<Float>(centre.x, centre.y, centre.z, 1)
+        let depth = -Double(point.z), k = frame.camera.intrinsics
+        guard depth > 0.2 else { return nil }
+        let cx = Double(k.columns.2.x) + Double(k.columns.0.x) * Double(point.x) / depth
+        let cy = Double(k.columns.2.y) - Double(k.columns.1.y) * Double(point.y) / depth
+        let halfWidth = Double(k.columns.0.x) * 0.13 / depth
+        let halfHeight = Double(k.columns.1.y) * 0.18 / depth
         let format = CVPixelBufferGetPixelFormatType(buffer)
         guard format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange else { return nil }
         guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
@@ -212,21 +272,38 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         guard let raw = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
         let w = CVPixelBufferGetWidthOfPlane(buffer, 0), h = CVPixelBufferGetHeightOfPlane(buffer, 0)
         let strideBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0), p = raw.assumingMemoryBound(to: UInt8.self)
-        let step = 4
-        guard w > step*2, h > step*2 else { return nil }
+        guard cx-halfWidth > 8, cx+halfWidth < Double(w)-8,
+              cy-halfHeight > 8, cy+halfHeight < Double(h)-8 else { return nil }
         let video = format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         func sample(_ x: Int, _ y: Int) -> Double {
             let v = Double(p[y*strideBytes+x]); return video ? max(0, min(255, (v-16)*255/219)) : v
         }
-        var count = 0.0, sum = 0.0, squares = 0.0, dark = 0.0, bright = 0.0
-        for y in Swift.stride(from: step, to: h-step, by: step) {
-            for x in Swift.stride(from: step, to: w-step, by: step) {
-                let v = sample(x,y), lap = sample(x-step,y)+sample(x+step,y)+sample(x,y-step)+sample(x,y+step)-4*v
-                count += 1; sum += lap; squares += lap*lap
-                if v < 8 { dark += 1 }; if v > 247 { bright += 1 }
+        var pixels: [Double] = []
+        for y in 0..<32 {
+            for x in 0..<32 {
+                let px = Int(cx-halfWidth + (Double(x)+0.5)*2*halfWidth/32)
+                let py = Int(cy-halfHeight + (Double(y)+0.5)*2*halfHeight/32)
+                pixels.append(sample(px,py))
             }
         }
-        return LumaQuality(sharpness: max(0, squares/count - pow(sum/count,2)), dark: dark/count, bright: bright/count)
+        return pixels
+    }
+
+    /// Serial queue prevents writes while Foundation snapshots all retained sessions.
+    func exportArchive(completion: @escaping @MainActor (URL?, String?) -> Void) {
+        queue.async {
+            self.automatic = false
+            var coordinationError: NSError?
+            var copyError: Error?
+            var exported: URL?
+            let destination = FileManager.default.temporaryDirectory.appendingPathComponent("HeadScans-" + UUID().uuidString + ".zip")
+            NSFileCoordinator().coordinate(readingItemAt: self.archiveRoot, options: .forUploading, error: &coordinationError) { snapshot in
+                do { try FileManager.default.copyItem(at: snapshot, to: destination); exported = destination }
+                catch { copyError = error }
+            }
+            let failure: Error? = coordinationError.map { $0 as Error } ?? copyError
+            DispatchQueue.main.async { completion(exported, failure?.localizedDescription) }
+        }
     }
 
     private func box(_ value: Bool?) -> Any { value.map { $0 as Any } ?? NSNull() }
@@ -235,5 +312,5 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         return String(data: data, encoding: .utf8)
     }
     private func publish(_ value: String) { DispatchQueue.main.async { self.onGuidance?(value) } }
-    enum CaptureError: Error { case invalidConfiguration, javascriptUnavailable, unsupportedDevice, imageGeometryMismatch, encodingFailed }
+    enum CaptureError: Error, Equatable { case invalidConfiguration, javascriptUnavailable, unsupportedDevice, imageGeometryMismatch, encodingFailed, lowStorage }
 }

@@ -27,7 +27,9 @@ var GuidedNative = (() => {
     coverage: () => coverage,
     evaluateDiagnosticFrame: () => evaluateDiagnosticFrame,
     evaluateFrame: () => evaluateFrame,
+    evaluateQuality: () => evaluateQuality,
     initialise: () => initialise,
+    resetQuality: () => resetQuality,
     setCentre: () => setCentre
   });
 
@@ -43,20 +45,23 @@ var GuidedNative = (() => {
   var wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
   var radians = (degrees) => degrees * Math.PI / 180;
   var finite = (v) => v.length === 3 && v.every(Number.isFinite);
-  function orbitSlots(total = 72) {
+  function orbitSlots(total = 72, arcDegrees = 360) {
     if (!Number.isInteger(total) || total < 24 || total > 128) throw new Error("Choose 24\u2013128 capture positions");
     const slots = [];
     for (let band = 0; band < 3; band++) {
       const count = Math.floor(total / 3) + (band < total % 3 ? 1 : 0);
-      for (let j = 0; j < count; j++) slots.push({ id: slots.length, azimuth: 2 * Math.PI * j / count, elevation: radians([-15, 0, 15][band]) });
+      for (let j = 0; j < count; j++) slots.push({ id: slots.length, azimuth: arcDegrees === 180 ? -Math.PI / 2 + Math.PI * j / (count - 1) : 2 * Math.PI * j / count, elevation: radians([-15, 0, 15][band]) });
     }
     return slots;
   }
   var GuidedOrbit = class {
-    constructor(total = 72) {
+    constructor(total = 72, arcDegrees = 360, handheld = false) {
+      this.arcDegrees = arcDegrees;
+      this.handheld = handheld;
       __publicField(this, "slots");
       __publicField(this, "centre", null);
       __publicField(this, "radius", 1);
+      __publicField(this, "frontAzimuth", 0);
       __publicField(this, "segment", "");
       __publicField(this, "generation", 0);
       __publicField(this, "sequence", 0);
@@ -65,13 +70,15 @@ var GuidedNative = (() => {
       __publicField(this, "previous", null);
       __publicField(this, "anchor", null);
       __publicField(this, "activeSlot", -1);
-      this.slots = orbitSlots(total);
+      this.slots = orbitSlots(total, arcDegrees);
     }
     /** Explicit confirmation required: a screen tap alone cannot determine depth. Resets coverage. */
-    setCentre(centre, radiusMetres, segment) {
+    setCentre(centre, radiusMetres, segment, frontAzimuth = 0) {
       if (!finite(centre) || !Number.isFinite(radiusMetres) || radiusMetres < 0.5 || radiusMetres > 1.5 || !segment) throw new Error("Invalid confirmed scan centre");
+      if (!Number.isFinite(frontAzimuth)) throw new Error("Invalid front direction");
       this.centre = [...centre];
       this.radius = radiusMetres;
+      this.frontAzimuth = frontAzimuth;
       this.segment = segment;
       this.generation++;
       this.done.clear();
@@ -113,7 +120,7 @@ var GuidedNative = (() => {
       if (frame.tracking !== "normal") return refuse("Pause \u2014 camera tracking needs to recover");
       const offset = sub(frame.position, this.centre), distance = length(offset);
       if (distance < 1e-6) return refuse("Move away from the scan centre");
-      const azimuth = Math.atan2(offset[0], offset[2]), elevation = Math.atan2(offset[1], Math.hypot(offset[0], offset[2]));
+      const azimuth = wrap(Math.atan2(offset[0], offset[2]) - this.frontAzimuth), elevation = Math.atan2(offset[1], Math.hypot(offset[0], offset[2]));
       const candidates = this.slots.filter((s) => !this.done.has(s.id));
       const score = (s) => wrap(azimuth - s.azimuth) ** 2 + (elevation - s.elevation) ** 2;
       const next = candidates.reduce((best, s) => score(s) < score(best) ? s : best, candidates[0]);
@@ -124,7 +131,7 @@ var GuidedNative = (() => {
         return result("Ready for a manual photo", next);
       }
       if (frame.subjectStill === null) return refuse("Subject motion check unavailable \u2014 use manual capture", next);
-      if (frame.subjectStill !== true) return refuse("Subject moved \u2014 pause briefly", next);
+      if (frame.subjectStill !== true) return refuse("Subject moved or image changed \u2014 pause briefly", next);
       if (frame.framed === null) return refuse("Head framing check unavailable \u2014 use manual capture", next);
       if (frame.framed !== true) return refuse("Keep the entire head in frame", next);
       if (frame.exposed === null) return refuse("Exposure check unavailable \u2014 use manual capture", next);
@@ -132,7 +139,8 @@ var GuidedNative = (() => {
       if (frame.sharp === null) return refuse("Sharpness check unavailable \u2014 use manual capture", next);
       if (frame.sharp !== true) return refuse("Wait for a sharp image", next);
       const perBand = this.slots.filter((s) => s.elevation === next.elevation).length;
-      if (Math.abs(wrap(azimuth - next.azimuth)) > 2 * Math.PI / perBand * 0.32) return refuse("Move around the subject toward the next marker", next);
+      const spacing = this.arcDegrees === 180 ? Math.PI / (perBand - 1) : 2 * Math.PI / perBand;
+      if (Math.abs(wrap(azimuth - next.azimuth)) > spacing * (this.arcDegrees === 180 ? 0.45 : 0.32)) return refuse("Move around the subject toward the next marker", next);
       if (Math.abs(elevation - next.elevation) > radians(5)) return refuse(elevation < next.elevation ? "Raise the camera" : "Lower the camera", next);
       const prev = this.previous;
       this.previous = { ...frame, position: [...frame.position], forward: [...frame.forward] };
@@ -146,16 +154,16 @@ var GuidedNative = (() => {
         this.pause();
         return result("Waiting for a continuous camera stream", next);
       }
-      if (length(sub(frame.position, prev.position)) / dt > 0.025 || angle(frame.forward, prev.forward) / dt > radians(2)) {
+      if (length(sub(frame.position, prev.position)) / dt > (this.handheld ? 0.08 : 0.025) || angle(frame.forward, prev.forward) / dt > radians(this.handheld ? 6 : 2)) {
         this.anchor = this.previous;
         return result("Hold camera still", next);
       }
       const anchor = this.anchor;
-      if (length(sub(frame.position, anchor.position)) > 6e-3 || angle(frame.forward, anchor.forward) > radians(0.8)) {
+      if (length(sub(frame.position, anchor.position)) > (this.handheld ? 0.012 : 6e-3) || angle(frame.forward, anchor.forward) > radians(this.handheld ? 1.5 : 0.8)) {
         this.anchor = this.previous;
         return result("Hold camera still", next);
       }
-      if (frame.timestamp - anchor.timestamp < 0.7) return result("Hold camera still", next);
+      if (frame.timestamp - anchor.timestamp < (this.handheld ? 0.6 : 0.7)) return result("Hold camera still", next);
       const ticket = { token: ++this.sequence, generation: this.generation, slot: next.id, frame: this.previous };
       this.pending = { ...ticket, frame: { ...ticket.frame, position: [...ticket.frame.position], forward: [...ticket.frame.forward] } };
       return result("Capture now", next, ticket);
@@ -164,12 +172,12 @@ var GuidedNative = (() => {
 
   // src/capture/guided-native.ts
   var planner = new GuidedOrbit();
-  function initialise(count) {
-    planner = new GuidedOrbit(count);
+  function initialise(count, arcDegrees = 360) {
+    planner = new GuidedOrbit(count, arcDegrees, arcDegrees === 180);
   }
   function setCentre(json) {
     const v = JSON.parse(json);
-    planner.setCentre(v.centre, v.radius, v.segment);
+    planner.setCentre(v.centre, v.radius, v.segment, v.frontAzimuth);
   }
   function evaluateFrame(json) {
     return JSON.stringify(planner.update(JSON.parse(json)));
@@ -182,6 +190,55 @@ var GuidedNative = (() => {
   }
   function coverage() {
     return JSON.stringify(planner.coverage());
+  }
+  var reference = null;
+  var calibration = [];
+  var previous = null;
+  function resetQuality() {
+    reference = null;
+    calibration = [];
+    previous = null;
+  }
+  function evaluateQuality(json) {
+    const s = JSON.parse(json);
+    const unknown = { sharp: null, exposed: null, framed: s.framed, subjectStill: null, reference, calibrating: reference === null };
+    if (!s.framed || !Number.isFinite(s.timestamp) || s.pixels.length !== 1024 || s.pixels.some((v) => !Number.isFinite(v) || v < 0 || v > 255)) {
+      previous = null;
+      return JSON.stringify(unknown);
+    }
+    const mean = s.pixels.reduce((a, b) => a + b, 0) / 1024;
+    const dark = s.pixels.filter((v) => v < 8).length / 1024, bright = s.pixels.filter((v) => v > 247).length / 1024;
+    let sum = 0, squares = 0, n = 0;
+    for (let y = 1; y < 31; y++) for (let x = 1; x < 31; x++) {
+      const i = y * 32 + x, lap = s.pixels[i - 1] + s.pixels[i + 1] + s.pixels[i - 32] + s.pixels[i + 32] - 4 * s.pixels[i];
+      sum += lap;
+      squares += lap * lap;
+      n++;
+    }
+    const sharpness = Math.max(0, squares / n - (sum / n) ** 2), exposed = dark < 0.4 && bright < 0.25;
+    const prior = previous;
+    previous = s;
+    const continuous = prior !== null && s.timestamp > prior.timestamp && s.timestamp - prior.timestamp <= 0.25 && s.cameraStill && prior.cameraStill;
+    const oldMean = prior ? prior.pixels.reduce((a, b) => a + b, 0) / 1024 : 0;
+    const difference = continuous ? s.pixels.reduce((a, v, i) => a + Math.abs(v - mean - (prior.pixels[i] - oldMean)), 0) / 1024 : null;
+    const still = difference === null ? null : difference < 14;
+    if (reference === null && s.cameraStill && still === true && exposed && sharpness >= 12) {
+      calibration.push(sharpness);
+      if (calibration.length >= 12) reference = [...calibration].sort((a, b) => a - b)[Math.floor(calibration.length / 2)];
+    }
+    return JSON.stringify({
+      sharp: reference === null ? null : sharpness >= Math.max(12, reference * 0.35),
+      exposed,
+      framed: true,
+      subjectStill: still,
+      reference,
+      calibrating: reference === null,
+      calibrationFrames: calibration.length,
+      sharpnessScore: sharpness,
+      darkFraction: dark,
+      brightFraction: bright,
+      difference
+    });
   }
   return __toCommonJS(guided_native_exports);
 })();

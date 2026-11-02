@@ -19,22 +19,23 @@ const angle=(a:V3,b:V3)=>Math.acos(Math.max(-1,Math.min(1,dot(unit(a),unit(b))))
 const wrap=(a:number)=>Math.atan2(Math.sin(a),Math.cos(a));
 const radians=(degrees:number)=>degrees*Math.PI/180;
 const finite=(v:V3)=>v.length===3&&v.every(Number.isFinite);
-export function orbitSlots(total=72):readonly OrbitSlot[]{
+export function orbitSlots(total=72,arcDegrees:180|360=360):readonly OrbitSlot[]{
  if(!Number.isInteger(total)||total<24||total>128)throw new Error('Choose 24–128 capture positions');
  const slots:OrbitSlot[]=[];
- for(let band=0;band<3;band++){const count=Math.floor(total/3)+(band<total%3?1:0);for(let j=0;j<count;j++)slots.push({id:slots.length,azimuth:2*Math.PI*j/count,elevation:radians([-15,0,15][band]!)});}
+ for(let band=0;band<3;band++){const count=Math.floor(total/3)+(band<total%3?1:0);for(let j=0;j<count;j++)slots.push({id:slots.length,azimuth:arcDegrees===180?-Math.PI/2+Math.PI*j/(count-1):2*Math.PI*j/count,elevation:radians([-15,0,15][band]!)});}
  return slots;
 }
 export class GuidedOrbit {
  readonly slots:readonly OrbitSlot[];
- private centre:V3|null=null;private radius=1;private segment='';private generation=0;private sequence=0;
+ private centre:V3|null=null;private radius=1;private frontAzimuth=0;private segment='';private generation=0;private sequence=0;
  private done=new Set<number>();private pending:CaptureTicket|null=null;
  private previous:OrbitFrame|null=null;private anchor:OrbitFrame|null=null;private activeSlot=-1;
- constructor(total=72){this.slots=orbitSlots(total);}
+ constructor(total=72,private readonly arcDegrees:180|360=360,private readonly handheld=false){this.slots=orbitSlots(total,arcDegrees);}
  /** Explicit confirmation required: a screen tap alone cannot determine depth. Resets coverage. */
- setCentre(centre:V3,radiusMetres:number,segment:string):void {
+ setCentre(centre:V3,radiusMetres:number,segment:string,frontAzimuth=0):void {
   if(!finite(centre)||!Number.isFinite(radiusMetres)||radiusMetres<.5||radiusMetres>1.5||!segment)throw new Error('Invalid confirmed scan centre');
-  this.centre=[...centre];this.radius=radiusMetres;this.segment=segment;this.generation++;this.done.clear();this.pending=null;this.pause();
+  if(!Number.isFinite(frontAzimuth))throw new Error('Invalid front direction');
+  this.centre=[...centre];this.radius=radiusMetres;this.frontAzimuth=frontAzimuth;this.segment=segment;this.generation++;this.done.clear();this.pending=null;this.pause();
  }
  private pause():void {this.previous=null;this.anchor=null;this.activeSlot=-1;}
  /** Mark complete only after the exact ticket image and metadata are durably saved. */
@@ -54,7 +55,7 @@ export class GuidedOrbit {
   if(frame.tracking!=='normal')return refuse('Pause — camera tracking needs to recover');
   const offset=sub(frame.position,this.centre),distance=length(offset);
   if(distance<1e-6)return refuse('Move away from the scan centre');
-  const azimuth=Math.atan2(offset[0],offset[2]),elevation=Math.atan2(offset[1],Math.hypot(offset[0],offset[2]));
+  const azimuth=wrap(Math.atan2(offset[0],offset[2])-this.frontAzimuth),elevation=Math.atan2(offset[1],Math.hypot(offset[0],offset[2]));
   const candidates=this.slots.filter(s=>!this.done.has(s.id));
   const score=(s:OrbitSlot)=>wrap(azimuth-s.azimuth)**2+(elevation-s.elevation)**2;
   const next=candidates.reduce((best,s)=>score(s)<score(best)?s:best,candidates[0]!);
@@ -63,7 +64,7 @@ export class GuidedOrbit {
   // Manual preview never invents passing detector results or issues an auto ticket.
   if(!captureEnabled){this.pause();return result('Ready for a manual photo',next);}
   if(frame.subjectStill===null)return refuse('Subject motion check unavailable — use manual capture',next);
-  if(frame.subjectStill!==true)return refuse('Subject moved — pause briefly',next);
+  if(frame.subjectStill!==true)return refuse('Subject moved or image changed — pause briefly',next);
   if(frame.framed===null)return refuse('Head framing check unavailable — use manual capture',next);
   if(frame.framed!==true)return refuse('Keep the entire head in frame',next);
   if(frame.exposed===null)return refuse('Exposure check unavailable — use manual capture',next);
@@ -71,18 +72,19 @@ export class GuidedOrbit {
   if(frame.sharp===null)return refuse('Sharpness check unavailable — use manual capture',next);
   if(frame.sharp!==true)return refuse('Wait for a sharp image',next);
   const perBand=this.slots.filter(s=>s.elevation===next.elevation).length;
-  if(Math.abs(wrap(azimuth-next.azimuth))>2*Math.PI/perBand*.32)return refuse('Move around the subject toward the next marker',next);
+  const spacing=this.arcDegrees===180?Math.PI/(perBand-1):2*Math.PI/perBand;
+  if(Math.abs(wrap(azimuth-next.azimuth))>spacing*(this.arcDegrees===180?.45:.32))return refuse('Move around the subject toward the next marker',next);
   if(Math.abs(elevation-next.elevation)>radians(5))return refuse(elevation<next.elevation?'Raise the camera':'Lower the camera',next);
   const prev=this.previous;this.previous={...frame,position:[...frame.position],forward:[...frame.forward]};
   if(!prev||this.activeSlot!==next.id){this.activeSlot=next.id;this.anchor=this.previous;return result('Hold camera still',next);}
   const dt=frame.timestamp-prev.timestamp;
   if(dt<=0||dt>.25||frame.id===prev.id){this.pause();return result('Waiting for a continuous camera stream',next);}
-  if(length(sub(frame.position,prev.position))/dt>.025||angle(frame.forward,prev.forward)/dt>radians(2)){
+  if(length(sub(frame.position,prev.position))/dt>(this.handheld?.08:.025)||angle(frame.forward,prev.forward)/dt>radians(this.handheld?6:2)){
    this.anchor=this.previous;return result('Hold camera still',next);
   }
   const anchor=this.anchor!;
-  if(length(sub(frame.position,anchor.position))>.006||angle(frame.forward,anchor.forward)>radians(.8)){this.anchor=this.previous;return result('Hold camera still',next);}
-  if(frame.timestamp-anchor.timestamp<.7)return result('Hold camera still',next);
+  if(length(sub(frame.position,anchor.position))>(this.handheld?.012:.006)||angle(frame.forward,anchor.forward)>radians(this.handheld?1.5:.8)){this.anchor=this.previous;return result('Hold camera still',next);}
+  if(frame.timestamp-anchor.timestamp<(this.handheld?.6:.7))return result('Hold camera still',next);
   const ticket:CaptureTicket={token:++this.sequence,generation:this.generation,slot:next.id,frame:this.previous};
   // Keep private ticket separate from caller-owned objects.
   this.pending={...ticket,frame:{...ticket.frame,position:[...ticket.frame.position],forward:[...ticket.frame.forward]}};
