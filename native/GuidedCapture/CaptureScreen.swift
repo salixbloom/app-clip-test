@@ -12,6 +12,7 @@ final class CaptureScreenModel: ObservableObject {
     @Published var candidate: SIMD3<Float>?
     @Published var estimatedDistance = 1.0
     @Published var savedFiles: [URL] = []
+    @Published var savedCount = 0
     @Published var coverage = Array(repeating: false, count: 72)
     @Published var nextSlot: Int?
     @Published var running = false
@@ -43,6 +44,7 @@ final class CaptureScreenModel: ObservableObject {
             }
             native.onSaved = { [weak self] folder in
                 self?.savedFiles = [folder.appendingPathComponent("image.jpg"), folder.appendingPathComponent("metadata.json")]
+                self?.savedCount += 1
             }
             marker.geometry?.firstMaterial?.diffuse.contents = UIColor.systemYellow
         } catch { message = "Capture setup failed: \(error.localizedDescription)" }
@@ -139,9 +141,9 @@ final class CaptureScreenModel: ObservableObject {
             VStack {
                 HStack(alignment:.top) {
                     VStack(alignment:.leading) {
-                        Text("Capture device check").font(.headline)
+                        Text("Capture test").font(.headline)
                         Text("Tracking: \(model.tracking)")
-                        Text("Automatic capture is disabled until quality checks are validated.").font(.caption)
+                        Text("Manual capture · automatic checks are not active").font(.caption)
                     }.padding().background(.black.opacity(0.75)).cornerRadius(12)
                     Spacer()
                     OrbitInset(model:model)
@@ -156,11 +158,11 @@ final class CaptureScreenModel: ObservableObject {
                         Button("Confirm scan centre") { model.confirm() }.disabled(model.candidate == nil || model.tracking != "normal")
                     }
                     HStack {
-                        Button("Save one diagnostic frame") { model.controller?.requestDiagnosticFrame() }
+                        Button("Take photo") { model.controller?.requestDiagnosticFrame() }
                             .disabled(model.centre == nil || model.tracking != "normal")
                         if !model.savedFiles.isEmpty { Button("Share saved pair") { sharing = true } }
                     }
-                    Text("Diagnostic frames do not complete capture positions. Files remain on this device until you share them.").font(.caption)
+                    Text("\(model.savedCount) photos saved on this iPhone. Manual photos do not fill the automatic capture markers.").font(.caption)
                 }.padding().background(.black.opacity(0.85)).cornerRadius(14)
             }.padding().foregroundColor(.white).buttonStyle(.borderedProminent)
         }

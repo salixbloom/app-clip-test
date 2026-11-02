@@ -43,7 +43,7 @@ export class GuidedOrbit {
   if(saved)this.done.add(this.pending.slot);this.pending=null;this.pause();return true;
  }
  coverage():readonly boolean[]{return this.slots.map(s=>this.done.has(s.id));}
- update(frame:OrbitFrame):Guidance {
+ update(frame:OrbitFrame,captureEnabled=true):Guidance {
   const result=(message:string,next:OrbitSlot|null=null,ticket:CaptureTicket|null=null):Guidance=>({message,completed:this.done.size,total:this.slots.length,next,ticket});
   const refuse=(message:string,next:OrbitSlot|null=null)=>{this.pause();return result(message,next);};
   if(!this.centre)return refuse('Set and confirm the scan centre');
@@ -60,9 +60,15 @@ export class GuidedOrbit {
   const next=candidates.reduce((best,s)=>score(s)<score(best)?s:best,candidates[0]!);
   if(Math.abs(distance-this.radius)>.12)return refuse(distance>this.radius?'Move closer':'Move farther away',next);
   if(angle(frame.forward,sub(this.centre,frame.position))>radians(8))return refuse('Aim at the centre of the head',next);
-  if(frame.subjectStill!==true)return refuse('Ask the subject to hold still — verify alignment',next);
+  // Manual preview never invents passing detector results or issues an auto ticket.
+  if(!captureEnabled){this.pause();return result('Ready for a manual photo',next);}
+  if(frame.subjectStill===null)return refuse('Subject motion check unavailable — use manual capture',next);
+  if(frame.subjectStill!==true)return refuse('Subject moved — pause briefly',next);
+  if(frame.framed===null)return refuse('Head framing check unavailable — use manual capture',next);
   if(frame.framed!==true)return refuse('Keep the entire head in frame',next);
+  if(frame.exposed===null)return refuse('Exposure check unavailable — use manual capture',next);
   if(frame.exposed!==true)return refuse('Adjust lighting — avoid dark areas and glare',next);
+  if(frame.sharp===null)return refuse('Sharpness check unavailable — use manual capture',next);
   if(frame.sharp!==true)return refuse('Wait for a sharp image',next);
   const perBand=this.slots.filter(s=>s.elevation===next.elevation).length;
   if(Math.abs(wrap(azimuth-next.azimuth))>2*Math.PI/perBand*.32)return refuse('Move around the subject toward the next marker',next);

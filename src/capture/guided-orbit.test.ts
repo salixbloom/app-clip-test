@@ -4,6 +4,19 @@ const frame=(t:number,patch:Partial<OrbitFrame>={}):OrbitFrame=>({id:String(t),t
 function planner(){const p=new GuidedOrbit();p.setCentre([0,0,0],1,'a');return p;}
 function dwell(p:GuidedOrbit,start=0,patch:Partial<OrbitFrame>={}){let result=p.update(frame(start,patch));for(let i=1;i<=9&&!result.ticket;i++)result=p.update(frame(start+i*.1,patch));return result;}
 describe('two-person guided capture',()=>{
+ it('does not call an unavailable movement detector detected movement',()=>{
+  expect(planner().update(frame(0,{subjectStill:null})).message).toContain('unavailable');
+  expect(planner().update(frame(0,{subjectStill:false})).message).toContain('Subject moved');
+ });
+ it('allows manual preview with unknown quality but never auto-captures or changes coverage',()=>{
+  const p=planner();
+  for(let i=0;i<20;i++){
+   const result=p.update(frame(i*.1,{subjectStill:null,framed:null,sharp:null,exposed:null}),false);
+   expect(result.message).toBe('Ready for a manual photo');expect(result.ticket).toBeNull();
+  }
+  expect(p.coverage().some(Boolean)).toBe(false);
+  expect(p.update(frame(3,{tracking:'limited'}),false).message).toContain('tracking');
+ });
  it('allocates exactly the requested number of evenly spaced positions',()=>{for(const count of [24,64,72,128]){const slots=orbitSlots(count);expect(slots).toHaveLength(count);for(const elevation of new Set(slots.map(s=>s.elevation))){const band=slots.filter(s=>s.elevation===elevation);for(let i=1;i<band.length;i++)expect(band[i]!.azimuth-band[i-1]!.azimuth).toBeCloseTo(2*Math.PI/band.length);}}expect(()=>orbitSlots(129)).toThrow();});
  it('requires explicit centre and acceptable tracking/quality for every frame',()=>{
   expect(new GuidedOrbit().update(frame(0)).ticket).toBeNull();

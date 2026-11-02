@@ -26,7 +26,8 @@ has expiry/refresh and active-app limitations; inspect the current official
 instructions. Compatibility of this particular app and personal signing is not
 yet device-tested. Do not treat an unsigned successful build as proof it installs.
 
-No signing software has been installed on the user's PC by this project. Apple
+AltServer and required Apple Windows components were installed with the user's
+authorization; the user has confirmed running the installed iPhone app. Apple
 credentials must be entered only in the selected local signing software, never
 in this chat, repository, workflow logs or public CI secrets. No paid account,
 purchase, device registration or certificate operation has been performed.
@@ -36,6 +37,13 @@ requests it, grant camera permission, verify normal tracking, confirm the scan
 centre, and save/share one diagnostic JPEG/JSON pair. Automatic guided capture
 remains disabled pending quality detectors and threshold validation. Diagnostic
 images never count as approved coverage.
+
+The test screen exposes a **Take photo** button and a saved-photo count. Confirm
+the centre and wait for normal tracking before using it. Manual preview does not
+require automatic quality-detector results: those detectors are not connected
+yet. A missing subject-motion result must never be reported as detected motion.
+Automatic mode continues to refuse unknown checks and never counts manual photos
+as guided coverage.
 
 The device test is incomplete until decoded image dimensions, SHA256 and visible
 target projection agree with the saved K/pose/orientation. Subject and marker

@@ -25,6 +25,7 @@ var GuidedNative = (() => {
   __export(guided_native_exports, {
     acknowledge: () => acknowledge,
     coverage: () => coverage,
+    evaluateDiagnosticFrame: () => evaluateDiagnosticFrame,
     evaluateFrame: () => evaluateFrame,
     initialise: () => initialise,
     setCentre: () => setCentre
@@ -93,7 +94,7 @@ var GuidedNative = (() => {
     coverage() {
       return this.slots.map((s) => this.done.has(s.id));
     }
-    update(frame) {
+    update(frame, captureEnabled = true) {
       const result = (message, next2 = null, ticket2 = null) => ({ message, completed: this.done.size, total: this.slots.length, next: next2, ticket: ticket2 });
       const refuse = (message, next2 = null) => {
         this.pause();
@@ -118,9 +119,17 @@ var GuidedNative = (() => {
       const next = candidates.reduce((best, s) => score(s) < score(best) ? s : best, candidates[0]);
       if (Math.abs(distance - this.radius) > 0.12) return refuse(distance > this.radius ? "Move closer" : "Move farther away", next);
       if (angle(frame.forward, sub(this.centre, frame.position)) > radians(8)) return refuse("Aim at the centre of the head", next);
-      if (frame.subjectStill !== true) return refuse("Ask the subject to hold still \u2014 verify alignment", next);
+      if (!captureEnabled) {
+        this.pause();
+        return result("Ready for a manual photo", next);
+      }
+      if (frame.subjectStill === null) return refuse("Subject motion check unavailable \u2014 use manual capture", next);
+      if (frame.subjectStill !== true) return refuse("Subject moved \u2014 pause briefly", next);
+      if (frame.framed === null) return refuse("Head framing check unavailable \u2014 use manual capture", next);
       if (frame.framed !== true) return refuse("Keep the entire head in frame", next);
+      if (frame.exposed === null) return refuse("Exposure check unavailable \u2014 use manual capture", next);
       if (frame.exposed !== true) return refuse("Adjust lighting \u2014 avoid dark areas and glare", next);
+      if (frame.sharp === null) return refuse("Sharpness check unavailable \u2014 use manual capture", next);
       if (frame.sharp !== true) return refuse("Wait for a sharp image", next);
       const perBand = this.slots.filter((s) => s.elevation === next.elevation).length;
       if (Math.abs(wrap(azimuth - next.azimuth)) > 2 * Math.PI / perBand * 0.32) return refuse("Move around the subject toward the next marker", next);
@@ -164,6 +173,9 @@ var GuidedNative = (() => {
   }
   function evaluateFrame(json) {
     return JSON.stringify(planner.update(JSON.parse(json)));
+  }
+  function evaluateDiagnosticFrame(json) {
+    return JSON.stringify(planner.update(JSON.parse(json), false));
   }
   function acknowledge(token, generation, saved) {
     return planner.acknowledge(token, generation, saved);

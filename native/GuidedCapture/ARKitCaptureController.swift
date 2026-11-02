@@ -119,7 +119,7 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
             "framed": box(checks?.framed), "subjectStill": box(checks?.subjectStill)
         ]
         guard let inputJSON = json(input),
-              let output = bridge.invokeMethod("evaluateFrame", withArguments: [inputJSON])?.toString(),
+              let output = bridge.invokeMethod(policy == nil || qualityProvider == nil ? "evaluateDiagnosticFrame" : "evaluateFrame", withArguments: [inputJSON])?.toString(),
               !bridgeFailure,
               let bytes = output.data(using: .utf8),
               let result = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { return }

@@ -7,5 +7,6 @@ export function setCentre(json:string):void {
  planner.setCentre(v.centre,v.radius,v.segment);
 }
 export function evaluateFrame(json:string):string {return JSON.stringify(planner.update(JSON.parse(json) as OrbitFrame));}
+export function evaluateDiagnosticFrame(json:string):string {return JSON.stringify(planner.update(JSON.parse(json) as OrbitFrame,false));}
 export function acknowledge(token:number,generation:number,saved:boolean):boolean {return planner.acknowledge(token,generation,saved);}
 export function coverage():string {return JSON.stringify(planner.coverage());}
