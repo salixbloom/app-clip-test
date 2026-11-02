@@ -31,6 +31,7 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
     private var previousCamera: simd_float4x4?
     private var lastProcessed = -Double.infinity
     private var referenceScore: Double?
+    private var detailSharpness: Double?
     private var scanPlan: [String: Any] = [:]
     private var diagnosticRequested = false
     private var centreConfirmed = false
@@ -156,6 +157,7 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         lastProcessed = frame.timestamp
         let camera = frame.camera, transform = camera.transform
         let frameID = UUID().uuidString
+        detailSharpness = nil
         let headBounds = sweepMode ? detectHead(frame.capturedImage) : nil
         let samples = sweepMode && headBounds == nil ? nil : sampleHead(frame, bounds: headBounds)
         let cameraStill: Bool
@@ -165,7 +167,8 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
                 simd_dot(transform.columns.2, previous.columns.2) > cos(Float(sampleInterval)*Float.pi/60)
         } else { cameraStill = false }
         previousCamera = transform
-        let qualityInput: [String: Any] = ["timestamp": frame.timestamp, "pixels": samples ?? [], "framed": samples != nil, "cameraStill": cameraStill]
+        var qualityInput: [String: Any] = ["timestamp": frame.timestamp, "pixels": samples ?? [], "framed": samples != nil, "cameraStill": cameraStill]
+        if let detailSharpness { qualityInput["detailSharpness"] = detailSharpness }
         let qualityJSON = json(qualityInput) ?? "{}"
         let qualityString = bridge.invokeMethod("evaluateQuality", withArguments: [qualityJSON])?.toString() ?? "{}"
         let quality = (qualityString.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] ?? [:]
@@ -364,6 +367,18 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
         func sample(_ x: Int, _ y: Int) -> Double {
             let v = Double(p[y*strideBytes+x]); return video ? max(0, min(255, (v-16)*255/219)) : v
         }
+        // Measure small-scale blur in original pixels, not the much coarser 32×32
+        // temporal sample grid. Only the scalar crosses the JavaScript boundary.
+        var lapSum = 0.0, lapSquares = 0.0
+        for y in 0..<64 {
+            for x in 0..<64 {
+                let px = Int(cx-halfWidth+(Double(x)+0.5)*2*halfWidth/64)
+                let py = Int(cy-halfHeight+(Double(y)+0.5)*2*halfHeight/64)
+                let lap = sample(px-2,py)+sample(px+2,py)+sample(px,py-2)+sample(px,py+2)-4*sample(px,py)
+                lapSum += lap; lapSquares += lap*lap
+            }
+        }
+        detailSharpness = max(0, lapSquares/4096-pow(lapSum/4096,2))
         var pixels: [Double] = []
         for y in 0..<32 {
             for x in 0..<32 {

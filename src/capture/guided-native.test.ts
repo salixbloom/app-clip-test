@@ -3,6 +3,12 @@ import * as bridge from './guided-native.js';
 import {parseARKitRecord,parseGuidedARKitRecord,projectARKitPoint} from './arkit-record.js';
 const fixture=()=>({schema:'arkit-image-record-v1',capturePurpose:'guided',sessionId:'session',segment:'origin1',frameId:'frame1',timestamp:1,image:{file:'image.jpg',width:640,height:480,sha256:'a'.repeat(64),orientation:'native-buffer',mirrored:false},cameraToWorld:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,1,1],intrinsics:[500,0,0,0,500,0,320,240,1],matrixOrder:'column-major',units:'metres',axes:'arkit-right-handed-y-up-camera-negative-z-forward',tracking:'normal',scaleValidated:false,quality:{sharpnessScore:100,darkFraction:0,brightFraction:0,framed:true,subjectStill:true},slot:0,generation:1});
 describe('native capture boundary',()=>{
+ it('uses fine pixel blur measurements instead of accepting coarse texture alone',()=>{
+  bridge.resetQuality();const pixels=Array.from({length:1024},(_,i)=>i%2?170:80);
+  for(let i=0;i<14;i++)bridge.evaluateQuality(JSON.stringify({timestamp:i*.1,pixels,framed:true,cameraStill:true,detailSharpness:100}));
+  const blurred=JSON.parse(bridge.evaluateQuality(JSON.stringify({timestamp:1.4,pixels,framed:true,cameraStill:true,detailSharpness:1})));
+  expect(blurred.reference).toBe(100);expect(blurred.sharp).toBe(false);
+ });
  it('allows small handheld jitter in front-half mode without accepting continued movement',()=>{
   bridge.initialise(24,180);bridge.setCentre(JSON.stringify({centre:[0,0,0],radius:1,segment:'a'}));
   let ticket=null;
@@ -39,6 +45,8 @@ describe('native capture boundary',()=>{
   const diagnostic={...fixture(),capturePurpose:'diagnostic'};
   expect(parseARKitRecord(diagnostic).capturePurpose).toBe('diagnostic');
   expect(()=>parseGuidedARKitRecord(diagnostic)).toThrow('Diagnostic');
+  expect(parseARKitRecord({...fixture(),capturePurpose:'sweep'}).capturePurpose).toBe('sweep');
+  expect(()=>parseGuidedARKitRecord({...fixture(),capturePurpose:'sweep'})).toThrow('Sweep');
   expect(parseGuidedARKitRecord(fixture()).capturePurpose).toBe('guided');
   expect(()=>parseARKitRecord({...fixture(),capturePurpose:undefined})).toThrow();
  });

@@ -42,7 +42,10 @@ coordinates; raw pixels and camera intrinsics are not rotated or cropped.
 Translation above .25 m/s prompts slower motion. There is no per-marker dwell.
 The selector uses the same three -15/0/+15-degree front-180 rows as before.
 These remain experimental thresholds, not an overlap or facial-accuracy guarantee.
-The 32×32 relative image-quality sample is coarse and can miss fine motion blur.
+Blur is scored with a two-pixel Laplacian sampled on a 64×64 grid in original
+head-region pixels, with a relative calibrated threshold. The separate 32×32
+grid supplies exposure/temporal checks. Relative sharpness is still a heuristic
+and cannot certify every detail or detect every motion-blurred image.
 
 Subject movement cannot be inferred from raw image differences while the phone
 is moving. Sweep records explicitly store `subjectStill:null` and
