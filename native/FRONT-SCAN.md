@@ -35,8 +35,8 @@ feedback. The next marker is nearest incomplete, not a mandatory sweep order.
 
 ## What image checks mean
 
-The confirmed point and camera intrinsics project an approximate 26×36 cm head
-envelope. It must fit inside the native image. This is geometric framing; it
+The confirmed point and camera intrinsics project an approximate world-upright 26×36×26 cm head
+box, projecting all eight corners so portrait buffer orientation is respected. It must fit inside the native image. This is geometric framing; it
 does not detect hair edges, face identity, expressions or subject orientation.
 Within that ROI, 32×32 luma samples provide Laplacian variance, clipped dark/bright
 fractions, and mean-subtracted difference between adjacent stationary-camera

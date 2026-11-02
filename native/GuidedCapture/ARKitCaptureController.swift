@@ -258,13 +258,24 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
     private func sampleHead(_ frame: ARFrame) -> [Double]? {
         guard let centre = confirmedPoint else { return nil }
         let buffer = frame.capturedImage
-        let point = simd_inverse(frame.camera.transform) * SIMD4<Float>(centre.x, centre.y, centre.z, 1)
-        let depth = -Double(point.z), k = frame.camera.intrinsics
-        guard depth > 0.2 else { return nil }
-        let cx = Double(k.columns.2.x) + Double(k.columns.0.x) * Double(point.x) / depth
-        let cy = Double(k.columns.2.y) - Double(k.columns.1.y) * Double(point.y) / depth
-        let halfWidth = Double(k.columns.0.x) * 0.13 / depth
-        let halfHeight = Double(k.columns.1.y) * 0.18 / depth
+        let inverse = simd_inverse(frame.camera.transform), k = frame.camera.intrinsics
+        // Project a world-upright box: native buffers remain landscape even when the
+        // phone/UI is portrait. Image-axis width/height assumptions would crop the head.
+        var xs: [Double] = [], ys: [Double] = []
+        for x in [-Float(0.13), Float(0.13)] {
+            for y in [-Float(0.18), Float(0.18)] {
+                for z in [-Float(0.13), Float(0.13)] {
+                    let p = inverse * SIMD4<Float>(centre.x+x, centre.y+y, centre.z+z, 1)
+                    let depth = -Double(p.z)
+                    guard depth > 0.2 else { return nil }
+                    xs.append(Double(k.columns.2.x) + Double(k.columns.0.x)*Double(p.x)/depth)
+                    ys.append(Double(k.columns.2.y) - Double(k.columns.1.y)*Double(p.y)/depth)
+                }
+            }
+        }
+        guard let left = xs.min(), let right = xs.max(), let top = ys.min(), let bottom = ys.max() else { return nil }
+        let cx = (left+right)/2, cy = (top+bottom)/2
+        let halfWidth = (right-left)/2, halfHeight = (bottom-top)/2
         let format = CVPixelBufferGetPixelFormatType(buffer)
         guard format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange else { return nil }
         guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
