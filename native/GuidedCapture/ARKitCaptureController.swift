@@ -143,6 +143,9 @@ final class ARKitCaptureController: NSObject, ARSessionDelegate {
                     DispatchQueue.main.async { self.onSaved?(url) }
                 } catch { reportSaveFailure(error) }
             } else { publish("{\"message\":\"Confirm centre and wait for normal tracking first\"}") }
+            // A manual request consumes this frame. Never persist the same frame ID
+            // again as an automatic ticket in this callback.
+            return
         }
         let input: [String: Any] = [
             "id": frameID, "segment": segment, "timestamp": frame.timestamp,
